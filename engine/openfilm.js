@@ -175,10 +175,11 @@ export function createOpenFilmFinisher({ config = {}, log = () => {}, media = nu
    * @param {number} input.lufs
    * @param {number} input.gainDb
    * @param {string|null} input.captions  字幕 .vtt 路径
+   * @param {Array} [input.lines]  配音时间轴：[{ file, at, seconds, volume }]，每句一条声音 clip
    * @param {string} input.filmDir   film.html 落盘目录
    */
   async function writeFilm(input) {
-    const { projectDir, clips, entries, bgm, width, height, captions, filmDir } = input;
+    const { projectDir, clips, entries, bgm, width, height, captions, filmDir, lines = [] } = input;
     const fadeEdge = 0.25;
     const tracks = [];
     let at = 0;
@@ -225,6 +226,23 @@ export function createOpenFilmFinisher({ config = {}, log = () => {}, media = nu
         const overrides = fadeIn || fadeOut ? ` overrides='[{"fade":[${fadeIn},${fadeOut}]}]'` : '';
         return `  <audio id="bgm${index + 1}" src="${attr(toSrc(filmDir, localBgm))}${piece.fragment}" at="${fmt(piece.at)}" volume="${volume}"${overrides}></audio>`;
       });
+      sections.push(`<section>\n${clips.join('\n')}\n</section>`);
+    }
+
+    // 对白：每句一条 <audio>，at 是它在成片时间轴上的起点。OpenFilm 把所有声音 clip 混在一起，
+    // 所以这里不需要先拼一条对白轨；BGM 的音量在 EDL 的 gainDb 里，已经是「给对白让路」的档位。
+    const dialogue = (Array.isArray(lines) ? lines : [])
+      .filter((line) => line?.file && existsSync(line.file) && Number.isFinite(Number(line.at)))
+      .sort((a, b) => Number(a.at) - Number(b.at));
+    if (dialogue.length > 0) {
+      const clips = [];
+      for (const [index, line] of dialogue.entries()) {
+        const local = await localize(line.file, projectDir);
+        const seconds = Number(line.seconds) || 0;
+        const volume = Number.isFinite(Number(line.volume)) ? Number(line.volume) : 1;
+        const fragment = seconds > 0 ? `#t=0,${fmt(seconds)}` : '';
+        clips.push(`  <audio id="vo${String(index + 1).padStart(2, '0')}" src="${attr(toSrc(filmDir, local))}${fragment}" at="${fmt(Math.max(0, Number(line.at)))}" volume="${volume}"></audio>`);
+      }
       sections.push(`<section>\n${clips.join('\n')}\n</section>`);
     }
 
@@ -328,10 +346,10 @@ ${sections.join('\n\n')}
    *
    * quality：'native' 原生渲（快，约 1.2 Mbps）；'high' 2 倍画再降采样（慢约 4 倍，画质更实、码率可控）。
    */
-  async function finish({ projectDir, edl, clips, entries, bgm, width, height, lufs, gainDb, fps = 30, workers = 0, finalFile, captions, quality = 'native', bitrate = 0 }) {
+  async function finish({ projectDir, edl, clips, entries, bgm, width, height, lufs, gainDb, fps = 30, workers = 0, finalFile, captions, quality = 'native', bitrate = 0, lines = [] }) {
     // film.html 就写在项目根：媒体用 segments/x.mp4 这种相对路径，不越过项目边界（OpenFilm 的服务只认项目内的文件）。
     const filmDir = projectDir;
-    const film = await writeFilm({ projectDir, clips, entries, bgm, width, height, lufs, gainDb, captions: captions ?? (existsSync(join(projectDir, 'captions.vtt')) ? join(projectDir, 'captions.vtt') : null), filmDir });
+    const film = await writeFilm({ projectDir, clips, entries, bgm, width, height, lufs, gainDb, lines, captions: captions ?? (existsSync(join(projectDir, 'captions.vtt')) ? join(projectDir, 'captions.vtt') : null), filmDir });
     log(`[openfilm] film.html：${film.timeline.length} 段 · ${film.duration}s · ${width}x${height}`);
 
     const supersample = String(quality).toLowerCase() === 'high' ? 2 : 1;

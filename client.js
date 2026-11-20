@@ -138,6 +138,11 @@ window.__ModuleLoader__.load({
       portrait: '定妆图',
       portraitFailed: '定妆图没生成',
       voiceOf: '音色',
+      voiceAudioReady: '已合成 {n} 句 · {engine}',
+      voiceAudioSkipped: '配音还没落地：{reason}',
+      voiceAudioOverflow: '{n} 句超出镜头（已自动加速）',
+      voiceAudioHard: '{n} 句装不进镜头：{list}',
+      voiceListen: '试听',
       bgm: 'BGM',
       edl: '剪辑清单',
       order: '成片顺序',
@@ -385,6 +390,11 @@ window.__ModuleLoader__.load({
       portrait: 'Portrait',
       portraitFailed: 'Portrait failed',
       voiceOf: 'Voice',
+      voiceAudioReady: '{n} lines voiced · {engine}',
+      voiceAudioSkipped: 'Voice not rendered yet: {reason}',
+      voiceAudioOverflow: '{n} lines longer than their shot (auto sped up)',
+      voiceAudioHard: '{n} lines do not fit the shot: {list}',
+      voiceListen: 'Listen',
       bgm: 'BGM',
       edl: 'Edit list',
       order: 'Final order',
@@ -1395,10 +1405,26 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function VoiceView({ t, artifact, catalog }) {
+    function VoiceView({ t, projectId, artifact, catalog, audio }) {
       if (!artifact) return h('p', { style: s.meta }, t('noArtifact'));
       const nameOf = (id) => (catalog ?? []).find((voice) => voice.id === id)?.name ?? id;
+      const voiced = new Map((audio?.lines ?? []).map((row) => [String(row.beatId), row]));
+      const overflows = audio?.warnings ?? [];
+      const hard = audio?.hard ?? [];
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+        audio?.skipped && audio?.error
+          ? h('p', { style: s.warnText }, fill(t('voiceAudioSkipped'), { reason: audio.error }))
+          : (audio?.lines?.length
+            ? h('p', { style: s.meta },
+              fill(t('voiceAudioReady'), { n: audio.lines.length, engine: audio.engine ?? 'tts' }),
+              overflows.length ? ` · ${fill(t('voiceAudioOverflow'), { n: overflows.length })}` : '')
+            : null),
+        hard.length
+          ? h('p', { style: s.warnText }, fill(t('voiceAudioHard'), {
+            n: hard.length,
+            list: hard.map((row) => `${row.beatId} ${row.seconds}s / ${row.slotSec}s`).join('；'),
+          }))
+          : null,
         h('div', { style: s.row }, (artifact.characters ?? []).map((row, index) =>
           h('span', { key: index, style: s.chip }, `${row.name} · ${nameOf(row.voiceId)} · ×${row.rate ?? 1}`))),
         artifact.narration?.enabled
@@ -1409,6 +1435,13 @@ window.__ModuleLoader__.load({
             h('span', { style: s.meta }, line.beatId),
             h('span', { style: { fontWeight: 500 } }, `${line.speaker}：`),
             h('span', { style: { flex: 1, minWidth: 0 } }, line.text),
+            voiced.has(String(line.beatId))
+              ? h('audio', {
+                src: `${FILE}?id=${encodeURIComponent(projectId)}&kind=voice&beatId=${encodeURIComponent(line.beatId)}`,
+                controls: true, preload: 'none', 'aria-label': t('voiceListen'),
+                style: { height: '26px', maxWidth: '200px' },
+              })
+              : null,
             h('span', { style: s.meta }, `${nameOf(line.voiceId)} · ${line.emotion ?? ''}`),
           )),
         ),
@@ -1794,7 +1827,7 @@ window.__ModuleLoader__.load({
       if (stage === 'story') return h(StoryView, { t, artifact: ctx.artifacts.story });
       if (stage === 'storyboard') return h(StoryboardView, { t, artifact: ctx.artifacts.storyboard, gate: ctx.project.stages.storyboard?.gate, onEdit: ctx.editStoryboard });
       if (stage === 'characters') return h(CharactersView, { t, projectId: ctx.project.id, artifact: ctx.artifacts.characters, style: config });
-      if (stage === 'voice') return h(VoiceView, { t, artifact: ctx.artifacts.voice, catalog: config?.voices });
+      if (stage === 'voice') return h(VoiceView, { t, projectId: ctx.project.id, artifact: ctx.artifacts.voice, catalog: config?.voices, audio: ctx.project.stages.voice?.audio });
       if (stage === 'render') return h(RenderView, { t, projectId: ctx.project.id, render: ctx.render, onRerender: ctx.rerenderSegment, running: ctx.running });
       return h(EditView, { t, projectId: ctx.project.id, edl: ctx.artifacts.edit, project: ctx.project, config });
     }

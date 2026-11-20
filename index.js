@@ -41,6 +41,7 @@ import { runVisionReview } from './engine/rea-vision.js';
 import { createVideoEngine, createVideoTaskStore, findCodex, mimeOf, priceOf, taskView } from './engine/video.js';
 import { createMedia, fadeFlagsOf } from './engine/media.js';
 import { createOpenFilmFinisher } from './engine/openfilm.js';
+import { synthesizeLines, placeLines } from './engine/voice.js';
 
 const API_PREFIX = '/creative-studio/api';
 const FILE_ROUTE = '/creative-studio/file';
@@ -709,6 +710,22 @@ export function apply(ctx, config = {}) {
           });
           await store.save(project, { pipeline: true });
           if (stage === 'characters') await ensurePortraits(project, artifact);
+          if (stage === 'voice') {
+            // 方案过了不算完：要真的合成出声音，并且念出来装得进镜头。装不进就停下来让人决定。
+            const audio = await ensureVoiceAudio(project, artifact);
+            if (audio?.hard?.length) {
+              const failures = audio.hard.map((row) => `台词 ${row.beatId} 念出来 ${row.seconds}s，镜头只给了 ${row.slotSec}s（已加速到 ${Math.round(row.rate * 100)}% 仍超 ${row.overflowSec}s）：缩短台词，或把这一镜加长（可用 edit_shot）`);
+              record.status = 'needs_review';
+              record.issues = failures;
+              event(project, { kind: 'voice-overflow', stage, text: `配音时长门拦下 ${failures.length} 句台词` });
+              await store.save(project, { pipeline: true });
+              const pending = await notifyReview(project, stage, {
+                score: review.score, issues: [], gateFailures: failures,
+                reason: '台词念出来装不进镜头',
+              });
+              return { ok: false, stage, needsReview: true, pendingReview: pending };
+            }
+          }
           return { ok: true, stage, attempts: attempt, score: review.score };
         }
 
@@ -769,6 +786,60 @@ export function apply(ctx, config = {}) {
       await store.save(project, { pipeline: true });
     }
     if (changed) await store.writeArtifact(project, 'characters', artifact);
+  }
+
+  /**
+   * 配音落地：方案 → 逐句 mp3（+ 时长门）。
+   *
+   * 这一步不改产物本身（05-voice.json 保持 Agent 写的样子），合成结果记在
+   * stages.voice.audio 上，面板按 beatId 试听、剪辑按它铺轨。合成失败只记原因不阻塞——
+   * 没有配音也要能把片子出出来，这是和原来行为的兼容点。
+   */
+  async function ensureVoiceAudio(project, artifact) {
+    const record = project.stages.voice;
+    const lines = Array.isArray(artifact?.lines) ? artifact.lines : [];
+    if (lines.length === 0) {
+      record.audio = { engine: null, lines: [], warnings: [], hard: [], skipped: 'no-dialogue', at: Date.now() };
+      await store.save(project, { pipeline: true });
+      return record.audio;
+    }
+    if (!options.ttsScript || !existsSync(options.ttsScript)) {
+      record.audio = { ok: false, skipped: true, lines: [], error: '没配置 TTS 脚本：在 ~/.dsh/creative-studio/machine.json 里把 ttsScript 指向 Easel 的 skills/shared/scripts/tts.py' };
+      event(project, { kind: 'voice-audio-skip', stage: 'voice', text: `配音未落地：${record.audio.error}` });
+      await store.save(project, { pipeline: true });
+      return record.audio;
+    }
+    try {
+      const storyboard = await artifactOf(project, 'storyboard');
+      const result = await synthesizeLines({
+        storyboard,
+        voice: artifact,
+        dir: join(store.dirOf(project.id), 'voice'),
+        python: options.ttsPython || 'python',
+        script: options.ttsScript,
+        provider: String(options.ttsProvider || options.ttsEngine || 'edge'),
+        adapter: join(PKG_ROOT, 'tools', 'unisound_tts.py'),
+        apiKey: String(options.ttsApiKey ?? ''),
+        baseUrl: String(options.ttsBaseUrl ?? ''),
+        engine: String(options.ttsEngine || 'edge'),
+        maxRate: Number(options.ttsMaxRate) || undefined,
+        ffprobe: media.ffprobe,
+        log,
+      });
+      record.audio = { ...result, ok: result.hard.length === 0, at: Date.now() };
+      event(project, {
+        kind: 'voice-audio',
+        stage: 'voice',
+        text: `配音已合成 ${result.lines.length} 句（${result.engine}）${result.hard.length ? `，${result.hard.length} 句装不进镜头` : result.warnings.length ? `，${result.warnings.length} 句略超已加速` : ''}`,
+      });
+      await store.save(project, { pipeline: true });
+      return record.audio;
+    } catch (error) {
+      record.audio = { ok: false, lines: [], error: error.message, at: Date.now() };
+      event(project, { kind: 'voice-audio-error', stage: 'voice', text: `配音合成失败（不阻塞出片）：${error.message}` });
+      await store.save(project, { pipeline: true });
+      return record.audio;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1004,10 +1075,22 @@ export function apply(ctx, config = {}) {
         continue;
       }
 
-      // 执行 EDL
+      // 执行 EDL（配音跟着 EDL 的段重排/裁剪走：真实段长到这一步才知道，最终时间轴在这里定）
       let output;
       try {
-        output = await executeEdl(project, edl, completed);
+        const voiceAudio = project.stages.voice?.audio;
+        const placed = voiceAudio?.lines?.length
+          ? placeLines({ lines: voiceAudio.lines, storyboard, edl, tasks: completed })
+          : { lines: [], overflows: [], dropped: [], duration: 0 };
+        record.audio = { count: placed.lines.length, overflows: placed.overflows, dropped: placed.dropped, duration: placed.duration, at: Date.now() };
+        if (placed.overflows.length > 0) {
+          event(project, {
+            kind: 'voice-cut',
+            stage: 'edit',
+            text: `${placed.overflows.length} 句台词在裁切后超时（${placed.overflows[0].beatId} 超 ${placed.overflows[0].overflowSec}s），已裁到片尾、不往回挪（否则会和上一句叠音）`,
+          });
+        }
+        output = await executeEdl(project, edl, completed, placed.lines);
         record.finalFile = output.finalFile;
         record.coverFile = output.coverFile;
         record.duration = output.duration;
@@ -1167,13 +1250,13 @@ export function apply(ctx, config = {}) {
    *   - ffmpeg：原来的 normalize → concat → mixAudio。
    * `finisher: 'auto'` 时先试 OpenFilm，失败一条日志退回 ffmpeg，绝不因为收尾器把整轮剪辑判死。
    */
-  async function executeEdl(project, edl, completedTasks) {
+  async function executeEdl(project, edl, completedTasks, voiceLines = []) {
     const mode = String(options.finisher ?? 'auto').toLowerCase();
     if (mode !== 'ffmpeg') {
       const usable = await openfilm.available().catch(() => ({ ok: false, reason: 'OpenFilm 不可用' }));
       if (usable.ok) {
         try {
-          const output = await executeEdlWithOpenFilm(project, edl, completedTasks);
+          const output = await executeEdlWithOpenFilm(project, edl, completedTasks, voiceLines);
           setFinisher(project, 'openfilm', usable.version);
           return output;
         } catch (error) {
@@ -1184,7 +1267,7 @@ export function apply(ctx, config = {}) {
         throw new Error(usable.reason);
       }
     }
-    const output = await executeEdlWithFfmpeg(project, edl, completedTasks);
+    const output = await executeEdlWithFfmpeg(project, edl, completedTasks, voiceLines);
     setFinisher(project, 'ffmpeg', '');
     return output;
   }
@@ -1197,7 +1280,7 @@ export function apply(ctx, config = {}) {
   }
 
   /** OpenFilm 收尾：EDL → film.html → render → 封面。 */
-  async function executeEdlWithOpenFilm(project, edl, completedTasks) {
+  async function executeEdlWithOpenFilm(project, edl, completedTasks, voiceLines = []) {
     const dir = store.dirOf(project.id);
     const order = (edl.order ?? []).map((entry) => ({ ...entry, task: new Map(completedTasks.map((task) => [String(task.segmentId), task])).get(String(entry.segmentId)) })).filter((entry) => entry.task?.file);
     if (order.length === 0) throw new Error('剪辑清单里没有任何可用片段');
@@ -1221,6 +1304,7 @@ export function apply(ctx, config = {}) {
       bitrate: Number(options.openfilmBitrate) || 0,
       fps: 30,
       workers: Number(options.openfilmWorkers) || 0,
+      lines: voiceLines,
       finalFile,
     });
 
@@ -1243,7 +1327,7 @@ export function apply(ctx, config = {}) {
   }
 
   /** 原来的 ffmpeg 收尾，一字未改（OpenFilm 不可用或失败时的退路）。 */
-  async function executeEdlWithFfmpeg(project, edl, completedTasks) {
+  async function executeEdlWithFfmpeg(project, edl, completedTasks, voiceLines = []) {
     const dir = join(store.dirOf(project.id), 'edit');
     await mkdir(dir, { recursive: true });
     const bySegment = new Map(completedTasks.map((task) => [String(task.segmentId), task]));
@@ -1278,6 +1362,7 @@ export function apply(ctx, config = {}) {
       bgm,
       gainDb: Number(edl.audio?.gainDb ?? -18),
       lufs: Number(edl.audio?.lufs ?? -14),
+      lines: voiceLines,
     });
 
     const info = await media.probe(finalFile);
@@ -2069,6 +2154,8 @@ export function apply(ctx, config = {}) {
       } else if (kind === 'portrait') {
         const characters = await store.artifact(project, 'characters');
         file = (characters?.characters ?? []).find((row) => row.name === String(payload?.name))?.portrait?.file;
+      } else if (kind === 'voice') {
+        file = (project.stages.voice?.audio?.lines ?? []).find((row) => String(row.beatId) === String(payload?.beatId))?.file;
       }
       if (!file || !existsSync(file)) return fail('not-found', '还没有这个文件');
       const info = await stat(file);
@@ -2145,6 +2232,9 @@ export function apply(ctx, config = {}) {
         } else if (kind === 'portrait') {
           const characters = await store.artifact(project, 'characters');
           file = (characters?.characters ?? []).find((row) => row.name === url.searchParams.get('name'))?.portrait?.file;
+        } else if (kind === 'voice') {
+          const beatId = url.searchParams.get('beatId') ?? '';
+          file = (project.stages.voice?.audio?.lines ?? []).find((row) => String(row.beatId) === beatId)?.file;
         } else if (kind === 'ref') {
           const name = url.searchParams.get('name') ?? '';
           if (name.includes('..') || !/^[\w./\-\u4e00-\u9fa5]+$/.test(name)) throw new Error('非法的资源名');

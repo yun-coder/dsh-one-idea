@@ -46,13 +46,22 @@ D:\智贸\10-创意工作台\
 过了门之后宿主会用这六维拼一条定妆提示词去生图，定妆图会在出片时作为**多参考图**喂给 H3，
 让同一个人在不同段里长得一样。
 
-### 配音的选择
+### 配音：方案 + 落地
 
-配音阶段只做「选择与分配」，不本地合成语音：
+配音阶段分两步，方案由生产 Agent 出，声音由宿主合成：
 
-- 音色只能从内置音色表（12 个）里选，每个说话人一个，同一人物全片不变；
-- 每句台词带情绪与语速，逐条对应分镜里的台词节拍（`beatId` 一一对上）；
-- 加一条 BGM 方案（情绪 + 编制 + BPM），剪辑阶段按它去 `bgmDir` 里模糊匹配一个音频文件，匹配不到就不混。
+- **方案**（`05-voice.json`）：音色只能从内置音色表（12 个）里选，每个说话人一个，同一人物全片不变；
+  每句台词带情绪与语速，逐条对应分镜里的台词节拍（`beatId` 一一对上）；再加一条 BGM 方案（情绪 + 编制 + BPM）。
+- **落地**（`engine/voice.js`）：方案过门后逐句调 TTS 合成 mp3，落在 `<项目>/voice/<beatId>.mp3`，
+  `beatId → 音色/语速/时长` 写进 `voice/manifest.json`（同文本同音色不重复合成）。
+  面板的配音表每句带试听按钮，源文件走 `/creative-studio/file?kind=voice&beatId=…`。
+- **音色映射**：`VOICE_TTS` 把 12 个审美 id（`v_f_warm` 等）映射到 edge 音色，`UNISOUND_VOICES` 映射到云知声音色
+  （温暖/知性/苍老/沉稳都有真音色，比 edge 的 6 个中文音色分得开）。`ttsProvider: 'unisound'` 时走
+  `tools/unisound_tts.py`（异步任务：创建 → 轮询 → 下载），情绪词按枚举下发，音色不支持时自动去掉重试。
+- **时长门**：每句合成后和它所在镜头的计划时长比。超了就按比例加速（上限 `ttsMaxRate`，默认 1.3 倍）再合成一次；
+  加速到上限仍超出 0.6 秒的，配音阶段停下、进人工复核，提示「缩短台词或把这一镜加长」（`creative_studio_edit_shot` 能改时长）。
+  小溢出（≤0.6 秒）只记警告，混音时贴着段尾收。
+- **铺轨**：剪辑阶段拿到**真实段长 + EDL 的段重排/裁切**后才定最终时间轴；被剪掉的镜头里的台词直接丢掉。
 
 ## 参考爆款（可选，来自「爆款复刻」）
 
@@ -175,7 +184,9 @@ rea-video summary   <reference>/rea/breakdown.json
 - **剪辑**：EDL 只允许 `cut` / `fade` 两种转场。`fade` 由宿主在统一规格时给每段首尾各做 0.25 秒淡入淡出
   （等价于过黑切），不做 xfade 交叉溶解——这样每段的音频不会错位，也能全程用 concat 打通。
   统一规格：等比缩放 + 黑边补足到 `outWidth × outHeight`、30fps、aac 48k 立体声。
-  最后混 BGM（`bgmDir` 里模糊匹配）+ 响度归一（`loudnorm` 到 EDL 指定的 LUFS，默认 -14），抽一帧当封面。
+  最后混 BGM（`bgmDir` 里模糊匹配）+ 对白 + 响度归一（`loudnorm` 到 EDL 指定的 LUFS，默认 -14），抽一帧当封面。
+  对白铺轨：OpenFilm 路径每句一条 `<audio at="…">`（声音 clip 由 OpenFilm 混在一起）；
+  ffmpeg 路径用 `adelay` + `amix` 铺开，BGM 过 `sidechaincompress`——有人说话就自动让路。
 
 ### 收尾器：ffmpeg 或 OpenFilm（`finisher`）
 
@@ -235,6 +246,7 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
   03-storyboard.json    分镜（可单独拿去过 shot-contract 的 13 道门）
   04-characters.json    人物六维 + 定妆图
   05-voice.json         配音方案
+  voice/                逐句合成的配音（<beatId>.mp3 + manifest.json）
   06-edl.json           剪辑清单 + 发布包
   07-final.mp4          成片
   08-publish.md         发布包（标题/文案/话题/剪辑判断）
@@ -302,6 +314,11 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 | `imageBaseUrl` / `imageKey` / `imageModel` | 定妆图（OpenAI 兼容端点，默认本机号池） |
 | `ffmpegPath` / `outWidth` / `outHeight` | 剪辑 |
 | `bgmDir` | BGM 目录（EDL 按情绪描述模糊匹配文件名） |
+| `ttsScript` / `ttsPython` | 配音落地的 TTS 脚本与解释器（默认指向 Easel 的 `skills/shared/scripts/tts.py`；留空 = 只出方案不出声） |
+| `ttsProvider` | `edge`（免费，默认）/ `unisound`（云知声 U2-TTS，要 key；异步任务，内置 `tools/unisound_tts.py` 适配） |
+| `ttsApiKey` / `ttsBaseUrl` | 云知声的 API key 与接口地址（key 只写在本机 `machine.json`，不进仓库） |
+| `ttsEngine` | 兼容旧字段：`ttsProvider` 留空时用它（`edge` / `closed`） |
+| `ttsMaxRate` | 台词超镜头时自动加速的上限，默认 1.3（= 最多快 30%） |
 | `skillDir` | shot-contract 技能目录（分镜门禁直接 import 它的 `check.mjs`） |
 | `scriptsDir` / `nodePath` / `pythonPath` / `asrModel` | 参考爆款的拉片脚本与解释器（默认指向 `douyin-teardown` 技能） |
 | `reaVideoCmd` | 可选：rea-video 可执行文件。填了就在拉片时多跑一遍逐镜判定；留空跳过 |
@@ -320,6 +337,7 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 - **审核有阶段边界**：每次只审当前阶段的产物，「缺分镜 / 缺台词 / 缺时长」这类跨阶段缺失不会被扣分。
 - **禁用词按字面匹配**：写 `最` 会连「最后」一起拦，把禁用词写成完整的词（`最好`、`第一`）更准。
 - **BGM 不联网找曲子**：只在 `bgmDir` 里按 EDL 的情绪描述匹配文件名；没有就只做配音轨。
-- **配音是方案不是合成**：插件不本地 TTS，音色选择用于指导后期配音或模型侧音色。
+- **配音默认走 edge**：免费、要外网；edge 只有 6 个大陆中文音色，音色表里 5 个女声会靠语速微调拉开，听起来仍是同一副嗓子。要真区分音色得配闭源 provider（CosyVoice2 等）。
+- **配音不做口型同步**：H3 出的是「演」，不是唇形对口型。旁白/内心独白/口播没问题，正面特写说话会显假；原片自带人声的复刻场景不要叠配音。
 - **任务进度在内存里**：重载插件会清掉进行中的轮询，但已落盘的成片与所有 JSON 仍在项目目录里。
 - **成本**：一次完整跑 = 若干次文本模型调用 + 每段一次 H3 生成（按时长×分辨率计费）+ 若干次生图。重做会重复花文本与生图的钱，但已完成的分段出片不会重复提交。

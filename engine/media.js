@@ -173,26 +173,63 @@ export function createMedia({ ffmpegPath = 'ffmpeg', log = () => {} }) {
     return output;
   }
 
-  /** 混 BGM 并把整体响度拉到目标值；没有 BGM 时只做响度归一。 */
-  async function mixAudio({ input, output, bgm = null, gainDb = -18, lufs = -14 }) {
+  /**
+   * 混音：BGM + 对白 + 原声，并把整体响度拉到目标值。
+   *
+   * lines 是配音时间轴（[{ file, at, volume }]）：按 at 用 adelay 铺开，
+   * BGM 走 sidechaincompress——有人说话时自动让路，没有对白时就是原来那条混 BGM 的路。
+   */
+  async function mixAudio({ input, output, bgm = null, gainDb = -18, lufs = -14, lines = [] }) {
     const loudnorm = `loudnorm=I=${Number(lufs).toFixed(1)}:TP=-1.5:LRA=11`;
-    if (!bgm || !existsSync(bgm)) {
-      await run(ffmpeg, ['-y', '-v', 'error', '-i', input, '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-af', loudnorm, '-c:a', 'aac', '-b:a', '192k', output]);
+    const hasBgm = Boolean(bgm && existsSync(bgm));
+    const talks = (Array.isArray(lines) ? lines : []).filter((line) => line?.file && existsSync(line.file));
+    if (talks.length === 0) {
+      if (!hasBgm) {
+        await run(ffmpeg, ['-y', '-v', 'error', '-i', input, '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-af', loudnorm, '-c:a', 'aac', '-b:a', '192k', output]);
+        return output;
+      }
+      const filter = [
+        `[1:a]volume=${Number(gainDb).toFixed(1)}dB,aresample=48000,aformat=channel_layouts=stereo[bg]`,
+        `[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0,${loudnorm},alimiter=limit=0.95[a]`,
+      ].join(';');
+      await run(ffmpeg, [
+        '-y', '-v', 'error',
+        '-i', input,
+        '-stream_loop', '-1', '-i', bgm,
+        '-filter_complex', filter,
+        '-map', '0:v:0', '-map', '[a]',
+        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest',
+        output,
+      ]);
       return output;
     }
-    const filter = [
-      `[1:a]volume=${Number(gainDb).toFixed(1)}dB,aresample=48000,aformat=channel_layouts=stereo[bg]`,
-      `[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0,${loudnorm},alimiter=limit=0.95[a]`,
-    ].join(';');
-    await run(ffmpeg, [
-      '-y', '-v', 'error',
-      '-i', input,
-      '-stream_loop', '-1', '-i', bgm,
-      '-filter_complex', filter,
-      '-map', '0:v:0', '-map', '[a]',
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest',
-      output,
-    ]);
+
+    const args = ['-y', '-v', 'error', '-i', input];
+    for (const line of talks) args.push('-i', line.file);
+    const bgmIndex = talks.length + 1;
+    if (hasBgm) args.push('-stream_loop', '-1', '-i', bgm);
+
+    const filters = ['[0:a]aresample=48000,aformat=channel_layouts=stereo[orig]'];
+    talks.forEach((line, index) => {
+      const delay = Math.max(0, Math.round((Number(line.at) || 0) * 1000));
+      const volume = Number.isFinite(Number(line.volume)) ? Number(line.volume) : 1;
+      // seconds 是铺到时间轴上允许的长度：被裁到片尾的句子要在这里截断，和 OpenFilm 的 #t=0,seconds 对齐。
+      const limit = Number(line.seconds) > 0 ? `atrim=0:${Number(line.seconds).toFixed(3)},asetpts=PTS-STARTPTS,` : '';
+      filters.push(`[${index + 1}:a]${limit}adelay=${delay}|${delay},aresample=48000,aformat=channel_layouts=stereo,volume=${volume}[d${index}]`);
+    });
+    filters.push(`${['[orig]', ...talks.map((_, index) => `[d${index}]`)].join('')}amix=inputs=${talks.length + 1}:normalize=0:duration=first[dlg]`);
+    if (hasBgm) {
+      filters.push(`[${bgmIndex}:a]volume=${Number(gainDb).toFixed(1)}dB,aresample=48000,aformat=channel_layouts=stereo[bg]`);
+      // sidechain 的输入只能消费一次：分一路给压缩器当触发信号，另一路留在最终混音里。
+      filters.push('[dlg]asplit=2[dlgsc][dlgmix]');
+      filters.push('[bg][dlgsc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=350[bgduck]');
+      filters.push(`[dlgmix][bgduck]amix=inputs=2:normalize=0:duration=first,${loudnorm},alimiter=limit=0.95[a]`);
+    } else {
+      filters.push(`[dlg]${loudnorm},alimiter=limit=0.95[a]`);
+    }
+    args.push('-filter_complex', filters.join(';'), '-map', '0:v:0', '-map', '[a]',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', output);
+    await run(ffmpeg, args);
     return output;
   }
 

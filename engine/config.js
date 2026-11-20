@@ -42,6 +42,16 @@ export const DEFAULTS = {
   codexCmd: '',
   ffmpegPath: '',
   bgmDir: '',
+  /** 配音落地：跑哪个 TTS 脚本（指向 Easel 的 skills/shared/scripts/tts.py），用哪个解释器。 */
+  ttsScript: '',
+  ttsPython: '',
+  ttsEngine: 'edge',
+  /** 配音引擎：edge（免费）/ unisound（云知声 U2-TTS，要 ttsApiKey）。留空 = 跟 ttsEngine。 */
+  ttsProvider: '',
+  ttsApiKey: '',
+  ttsBaseUrl: '',
+  /** 台词比镜头长时自动加速的上限（1.3 = 最多快 30%）。 */
+  ttsMaxRate: 1.3,
   outWidth: 1080,
   outHeight: 1920,
   skillDir: '',
@@ -116,6 +126,12 @@ export function resolveConfig(config = {}, machine = loadMachineOverrides()) {
   fill('codexCmd', ['CODEX_BIN']);
   fill('ffmpegPath', ['FFMPEG_PATH']);
   fill('bgmDir');
+  fill('ttsScript', ['TTS_SCRIPT']);
+  fill('ttsPython', ['TTS_PYTHON']);
+  fill('ttsEngine', ['TTS_ENGINE']);
+  fill('ttsProvider', ['TTS_PROVIDER']);
+  fill('ttsApiKey', ['UNISOUND_API_KEY']);
+  fill('ttsBaseUrl', ['UNISOUND_BASE_URL']);
   fill('skillDir', ['SHOT_CONTRACT_DIR']);
   fill('scriptsDir', ['DOUYIN_TEARDOWN_SCRIPTS']);
   fill('reaVideoCmd');
