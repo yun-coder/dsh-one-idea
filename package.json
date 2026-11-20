@@ -1,0 +1,56 @@
+{
+  "name": "dsh-creative-studio",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "创意工作台：产品画像 + 热点 → 创意 idea → 故事剧情 → 分镜脚本 → 人物六维 → 配音方案 → 出片 → 成片剪辑。生产 Agent、剪辑团队 Agent、审核 Agent 三方协作，质量不过自动打回并通知复核；内置拉片台（爆款拆解 + 逐镜判定 + 复刻分镜）。",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "video",
+    "storyboard",
+    "shot-contract",
+    "creative"
+  ],
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "engine",
+    "tools",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "test"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "license": "MIT"
+}

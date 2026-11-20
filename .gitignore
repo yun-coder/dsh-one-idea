@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+*.log
+.DS_Store
+Thumbs.db
+# 本机运行产物，不进仓库
+projects/
+data/
+machine.json
+secrets.json
+*.local.*

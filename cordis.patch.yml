@@ -1,0 +1,64 @@
+# 创意工作台（creative-studio）的装载层。
+#
+# 这里**不放任何密钥和本机绝对路径**。留空的值会依次回落到：
+#   1) ~/.dsh/creative-studio/machine.json（本机私有，不要提交）
+#   2) 环境变量（EASYFRAME_API_KEY / MNMX_CARD_KEY / IMAGE_API_KEY / FFMPEG_PATH …）
+#   3) 代码里的默认值（项目和数据默认落在 ~/.dsh/creative-studio）
+# 所以换机器只要准备一份 machine.json，仓库保持干净。
+- insert:
+    - id: creative-studio
+      name: dsh-creative-studio
+      config:
+        # 项目落盘目录；留空 = <dataDir>/projects
+        projectDir: ''
+        # 出片任务索引、生图与拉片产物；留空 = ~/.dsh/creative-studio
+        dataDir: ''
+        # 三个 Agent 的单次调用上限（毫秒）与输出预算
+        llmTimeoutMs: 300000
+        llmMaxTokens: 8000
+        # 审核通过线（0–100）；低于这条线就进打回流程
+        reviewThreshold: 80
+        # 同一个阶段最多自动打回重做几次；用完仍不达标就停下来通知人工复核
+        maxRework: 2
+        # 每段生成的画幅/分辨率/时长档位
+        aspectRatio: '9:16'
+        resolution: '720p'
+        videoModel: 'minimax-h3-mini'
+        # ---- 出片后端 ----
+        # auto：先用 EasyFrame，鉴权/额度/维护类失败再退到鼠鼠工具
+        videoProvider: 'auto'
+        easyframeApiKey: ''
+        easyframeBaseUrl: 'https://minimax.api.easyframe.cn'
+        mnmxBaseUrl: 'https://www.runlive.top/mnmx'
+        mnmxCardKey: ''
+        # 下载后是否裁掉底部字幕带（H3 会把引号台词烧成字幕；裁了画幅会变窄）
+        trimSubtitleBand: false
+        subtitleBandRatio: 0.18
+        # ---- 人物定妆图（OpenAI 兼容端点，默认本机号池）----
+        imageBaseUrl: 'http://127.0.0.1:38650/v1'
+        imageKey: ''
+        imageModel: 'gpt-image-2'
+        # ---- 剪辑 ----
+        ffmpegPath: ''
+        bgmDir: ''
+        outWidth: 1080
+        outHeight: 1920
+        # ---- 质量门 ----
+        # shot-contract 技能目录；留空 = ~/.dsh/skills/shot-contract
+        skillDir: ''
+        # 可选：rea-video 可执行文件（逐镜判定 实拍/AI/代码 + 复刻路线）。留空就不跑
+        reaVideoCmd: ''
+        # 拉完用当前能看图的模型做逐镜看图复核
+        reaVision: true
+        reaVisionShots: 12
+        # 需要复核时的额外推送地址（留空不推）
+        notifyWebhook: ''
+        # ---- 成片收尾器 ----
+        # auto：装得上 OpenFilm 就用它收尾，失败退回 ffmpeg
+        finisher: 'auto'
+        openfilmCmd: ''
+        openfilmCheckouts: []
+        openfilmWorkers: 0
+        openfilmQuality: 'native'
+        openfilmBitrate: 0
+        openfilmLook: true

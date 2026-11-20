@@ -1,0 +1,24 @@
+dsh-creative-studio
+===================
+
+本插件自身以 MIT 授权发布。它在运行时调用或依赖了以下第三方组件，这些组件
+**不随本仓库分发**，用户需自行安装：
+
+1. shot-contract（MIT）
+   分镜阶段的 13 道确定性质量门直接 import 该技能里的 scripts/check.mjs，
+   保证「技能说能过」和「工作台说能过」是同一份判定。
+   https://github.com/ 搜索 `shot-contract` 技能，或放置到 ~/.dsh/skills/shot-contract。
+
+2. rea-video（Apache-2.0）
+   可选的逐镜制作方式判定（实拍 / AI / 代码渲染）与复刻路线。
+   通过配置 reaVideoCmd 调用其命令行，不复制其源码。
+   https://github.com/JuneYaooo/rea-video
+
+3. douyin-teardown 技能脚本（随该技能分发）
+   拉片台的下载 / 切点抽帧 / 语音转写脚本，通过配置 scriptsDir 调用。
+
+4. FFmpeg（LGPL/GPL，取决于构建）
+   剪辑、拼接、混音、抽帧；通过配置 ffmpegPath 或 PATH 调用，不随包分发。
+
+5. OpenFilm（可选，按其自身许可证）
+   成片收尾器；未安装时自动退回 FFmpeg 路径。
