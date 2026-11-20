@@ -514,7 +514,11 @@ window.__ModuleLoader__.load({
 
     /** 角色与状态都走 t()，中英切换一致。 */
     const agentLabel = (t, agent) => (agent === 'producer' ? t('agentProducer') : agent === 'editor' ? t('agentEditor') : agent === 'reviewer' ? t('agentReviewer') : agent);
-    const statusLabel = (t, status) => t(`status_${status}`);
+    const statusLabel = (t, status) => {
+      const label = t(`status_${status}`);
+      // 新状态没来得及翻译时退回原始状态，而不是把 status_xxx 这种键名露给用户。
+      return !label || String(label).startsWith('status_') ? status : label;
+    };
     /** 非组件函数（call）的文案：Panel 挂载时把 t 注入进来。 */
     let text = (key, vars) => fill(key, vars);
 
