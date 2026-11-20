@@ -263,13 +263,14 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 | `creative_studio_status` | 看阶段状态、审核分、门禁失败、待复核项 |
 | `creative_studio_run` | 跑流水线（可指定从哪个阶段开始、`only` 只跑一个阶段、可把意见带进这一轮） |
 | `creative_studio_decide` | 对待复核项裁决：通过 / 打回（带意见）/ 跳过 |
+| `creative_studio_edit_shot` | 改一个镜头（提示词/动作/时长）或一句台词，改完重跑 13 道门；改台词会自动同步进认领它的镜头提示词 |
 
 原来两个插件的工具名**原样保留**，实现已经换成工作台自己的引擎，技能里的老调用不会失效：
 
 | 工具 | 用途 |
 |---|---|
 | `h3_generate_video` | 文生视频 / 首帧 / 首尾帧 / 多参考（5–15 秒，480p/720p，9 种画幅） |
-| `h3_generate_image` | 本机号池生图 |
+| `h3_generate_image` | 生图：默认用本机 Codex 的 `image_generation`，没有 Codex 时走 OpenAI 兼容端点 |
 | `h3_concat_videos` | 按顺序把已完成的任务拼成一条 MP4 |
 | `h3_video_tasks` | 查独立出片任务（持久化索引，重载插件后还在） |
 | `h3_remix_video` | 拉片 + 报告（`replicate: true` 时连复刻分镜一起出） |
@@ -284,6 +285,7 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 | `dataDir` | 独立出片任务、生图与拉片任务索引（默认 `~/.dsh/creative-studio`） |
 | `llmTimeoutMs` / `llmMaxTokens` | 三个 Agent 的单次调用上限与输出预算 |
 | `reviewThreshold` | 审核通过线（0–100），默认 80 |
+| `reviewPolicy` | `balanced`（默认）：门禁过、无 blocker、分数 ≥ 阈值−12 就带建议收下；`strict`：必须审核说 pass 且到阈值 |
 | `maxRework` | 单阶段自动重做次数，默认 2 |
 | `aspectRatio` / `resolution` / `videoModel` | 出片默认档位 |
 | `videoProvider` | `auto` / `easyframe` / `mnmx` |

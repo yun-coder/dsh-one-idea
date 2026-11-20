@@ -18,6 +18,8 @@
         llmMaxTokens: 8000
         # 审核通过线（0–100）；低于这条线就进打回流程
         reviewThreshold: 80
+        # strict：必须审核说 pass 且到阈值；balanced：门禁过、无 blocker、分数在阈值-12 以上就带建议收下
+        reviewPolicy: 'balanced'
         # 同一个阶段最多自动打回重做几次；用完仍不达标就停下来通知人工复核
         maxRework: 2
         # 每段生成的画幅/分辨率/时长档位

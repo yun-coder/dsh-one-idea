@@ -203,6 +203,56 @@ export function applyLocks(doc, buildLock) {
   return { doc, changed };
 }
 
+/** 分镜局部编辑：改一个镜头（提示词/动作/时长）或一句台词，返回改了几处。 */
+export function patchStoryboard(doc, patch = {}) {
+  const shotPatch = patch?.shot ?? null;
+  const beatPatch = patch?.beat ?? null;
+  if (!shotPatch?.id && !beatPatch?.id) throw new Error('要改什么：给 shot.id 或 beat.id');
+  let changed = 0;
+  if (shotPatch?.id) {
+    const shot = (doc?.shots ?? []).find((item) => String(item?.id) === String(shotPatch.id));
+    if (!shot) throw new Error(`没有镜头 ${shotPatch.id}`);
+    if (typeof shotPatch.prompt === 'string' && shotPatch.prompt.trim() !== String(shot.prompt ?? '')) {
+      shot.prompt = shotPatch.prompt.trim();
+      changed += 1;
+    }
+    if (typeof shotPatch.action === 'string' && shotPatch.action.trim() !== String(shot.action ?? '')) {
+      shot.action = shotPatch.action.trim();
+      changed += 1;
+    }
+    if (shotPatch.durationSec !== undefined) {
+      const seconds = Number(shotPatch.durationSec);
+      if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('时长要是正数秒');
+      shot.durationSec = Math.round(seconds * 10) / 10;
+      changed += 1;
+    }
+  }
+  if (beatPatch?.id) {
+    const beat = (doc?.beats ?? []).find((item) => String(item?.id) === String(beatPatch.id));
+    if (!beat) throw new Error(`没有节拍 ${beatPatch.id}`);
+    if (typeof beatPatch.text === 'string' && beatPatch.text.trim() !== String(beat.text ?? '')) {
+      const before = String(beat.text ?? '');
+      const after = beatPatch.text.trim();
+      beat.text = after;
+      changed += 1;
+      // 台词锁在提示词里：改台词必须同步替换认领它的镜头提示词，否则 G10 逐字对不上。
+      if (before) {
+        for (const shot of doc?.shots ?? []) {
+          if (!(shot.claims ?? []).includes(beat.id)) continue;
+          if (typeof shot.prompt === 'string' && shot.prompt.includes(before)) {
+            shot.prompt = shot.prompt.split(before).join(after);
+          }
+        }
+      }
+    }
+    if (typeof beatPatch.speaker === 'string' && beatPatch.speaker.trim() !== String(beat.speaker ?? '')) {
+      beat.speaker = beatPatch.speaker.trim();
+      changed += 1;
+    }
+  }
+  return { doc, changed };
+}
+
 export function gateStoryboard(doc, project = {}, shotContract = null) {
   const failures = [];
   const extra = [];
@@ -223,7 +273,9 @@ export function gateStoryboard(doc, project = {}, shotContract = null) {
 
   // 可理解性：台词要真的把它讲出来——开头有一条立前提，结尾有一条交付落点。
   const lines = dialogueOf(doc);
-  if (lines.length === 0) push(extra, '整条片子没有一句台词：观众只能看画面猜，通常看不明白');
+  if (project?.brief?.audioMode === 'no-dialogue') {
+    if (lines.length > 0) push(extra, '无对白项目的分镜含有台词节拍');
+  } else if (lines.length === 0) push(extra, '整条片子没有一句台词：观众只能看画面猜，通常看不明白');
   else {
     const totalSec = shots.reduce((sum, shot) => sum + (Number(shot?.durationSec) || 0), 0) || 1;
     const startOf = (shotId) => {

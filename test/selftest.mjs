@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import {
   GATES,
   gateIdea, gateStory, gateStoryboard, gateCharacters, gateVoice, gateEdit,
-  loadShotContract, segmentsOf, dialogueOf, SIX_DIMENSIONS,
+  loadShotContract, segmentsOf, dialogueOf, SIX_DIMENSIONS, patchStoryboard,
 } from '../engine/contracts.js';
 import { extractJson } from '../engine/agents.js';
 import { createStore, newProject, event } from '../engine/store.js';
@@ -240,6 +240,53 @@ try {
   await rm(work, { recursive: true, force: true });
 }
 await rm(root, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+console.log('\n[9] 分镜局部编辑：改一镜/一句，不重生成整条');
+{
+  const doc = structuredClone(sample);
+  const shot = doc.shots[0];
+  const beatLine = (doc.beats ?? []).find((beat) => beat.kind === 'line');
+  const patched = patchStoryboard(structuredClone(doc), {
+    shot: { id: shot.id, prompt: `${shot.prompt} 加一句补充。`, durationSec: 2.5 },
+    beat: beatLine ? { id: beatLine.id, text: '这是改过的一句台词' } : null,
+  });
+  const nextShot = patched.doc.shots.find((item) => item.id === shot.id);
+  check('改了提示词与时长', nextShot.prompt.endsWith('加一句补充。') && nextShot.durationSec === 2.5, JSON.stringify(nextShot.durationSec));
+  check('改动了台词', !beatLine || patched.doc.beats.find((item) => item.id === beatLine.id).text === '这是改过的一句台词');
+  check('返回改动条数', patched.changed >= 2, String(patched.changed));
+
+  let threw = false;
+  try {
+    patchStoryboard(structuredClone(doc), { shot: { id: 'NOPE', prompt: 'x' } });
+  } catch {
+    threw = true;
+  }
+  check('未知镜头会报错', threw);
+
+  threw = false;
+  try {
+    patchStoryboard(structuredClone(doc), { shot: { id: shot.id, durationSec: -1 } });
+  } catch {
+    threw = true;
+  }
+  check('负时长会报错', threw);
+
+  const edited = patchStoryboard(structuredClone(doc), { shot: { id: shot.id, prompt: shot.prompt } });
+  check('没变化时 changed 为 0', edited.changed === 0, String(edited.changed));
+
+  // 改台词要同步改认领该节拍的镜头提示词，否则 G10 逐字对不上。
+  const lineBeat = (doc.beats ?? []).find((beat) => beat.kind === 'line'
+    && (doc.shots ?? []).some((item) => (item.claims ?? []).includes(beat.id) && String(item.prompt ?? '').includes(beat.text)));
+  if (lineBeat) {
+    const next = patchStoryboard(structuredClone(doc), { beat: { id: lineBeat.id, text: `${lineBeat.text}（改）` } });
+    const synced = next.doc.shots.filter((item) => (item.claims ?? []).includes(lineBeat.id))
+      .every((item) => item.prompt.includes(`${lineBeat.text}（改）`));
+    check('改台词同步进提示词', synced);
+  } else {
+    check('改台词同步进提示词（样例没有可对上的台词镜，跳过）', true);
+  }
+}
 
 console.log(`\n结果：${pass} 通过，${failed} 失败`);
 if (failed > 0) process.exit(1);

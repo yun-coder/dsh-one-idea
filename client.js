@@ -18,6 +18,40 @@ window.__ModuleLoader__.load({
     const DIM_KEYS = ['face', 'features', 'hair', 'costume', 'posture', 'motif'];
 
     const zh = {
+      reviewDesk: "审片台",
+      planDesk: "分段清单",
+      openReview: "打开审片台",
+      startRendering: "确认并生成分段",
+      assemble: "合成当前素材",
+      editIssue: "按意见重剪",
+      retakeIssue: "重做当前段",
+      retakeNotes: "本段返工要求",
+      reviewNoIssues: "当前没有画面审片标记",
+      techCheck: "技术检查",
+      finalCheck: "终审",
+      humanCheck: "人工复核",
+      notChecked: "待检查",
+      passed: "通过",
+      failedCheck: "未通过",
+      staleCut: "素材已更新，播放器仍显示上一版。合成后查看当前版本。",
+      segmentCompare: "分段版本对比",
+      useVersion: "采用对比版",
+      currentVersion: "当前素材",
+      alternateVersion: "对比素材",
+      actualReferences: "实际使用的定妆图",
+      plannedReferences: "可用定妆图",
+      noReferences: "无可用定妆图",
+      unknownReferences: "历史任务未记录实际绑定",
+      openingFrame: "起始动作",
+      endingFrame: "末帧状态",
+      criticalProps: "道具和现场关系",
+      preflightWait: "先完成分镜、人物和声音方案。",
+      preflightDuration: "计划生成 {n} 秒",
+      inspectIssue: "查看标记",
+      editTimeline: "成片时间线",
+      checkFrame: "打开抽检画面",
+      approveCut: "通过当前成片",
+      viewDetails: "查看剪辑与验收详情",
       title: '创意工作台',
       loading: '正在读取工作台…',
       noProject: '还没有项目',
@@ -41,6 +75,12 @@ window.__ModuleLoader__.load({
       priceBand: '价格带',
       forbidden: '客户禁用词（逗号分隔）',
       extra: '补充要求',
+      audioMode: '声音形式',
+      projectMode: '制作类型',
+      projectPromotion: '产品宣传',
+      projectStory: '剧情短片',
+      dialogueAudio: '含对白',
+      noDialogueAudio: '无对白',
       targetSeconds: '目标时长（秒）',
       platform: '平台',
       aspect: '画幅',
@@ -55,7 +95,7 @@ window.__ModuleLoader__.load({
       noHotspot: '还没有热点。可以点「抓热点」，也可以手填——没有热点时生产 Agent 只按品类常识走。',
       hotspotHint: '热点是创意的依据：每条创意都要挂到具体的热点上，挂不上会被门禁打回。',
       pipeline: '生产流水线',
-      runAll: '一键跑到成片',
+      runAll: '准备分段清单',
       runStage: '重跑这一阶段',
       running: '运行中…',
       agent: { producer: '生产 Agent', editor: '剪辑团队 Agent', reviewer: '审核 Agent' },
@@ -113,6 +153,26 @@ window.__ModuleLoader__.load({
       refTitle: '参考爆款（拉片）',
       refPlaceholder: '粘贴抖音分享文案或链接',
       refLocal: '或本机视频路径',
+      advancedReference: '高级逐镜分析',
+      projectBriefTab: '简报与参考',
+      manualReviewPassed: '人工通过',
+      renderQueued: '排队中',
+      renderCompleted: '已生成',
+      renderCancelled: '已取消',
+      renderReferenceCount: '角色参考图 {n} 张',
+      renderTextOnly: '纯文生视频',
+      retakeSegment: '重新生成此段',
+      visualUnavailable: '画面验收未完成',
+      referenceLibraryTab: '拉片台',
+      shotTimeline: '分镜时间线',
+      editShot: '编辑',
+      saveShot: '保存并过门禁',
+      cancelEdit: '取消',
+      shotPrompt: '提示词（至少 60 字）',
+      shotSeconds: '时长（秒）',
+      shotLine: '这一镜的台词',
+      shotEditSaved: '已保存，门禁已重跑',
+      passedWithNotes: '带建议通过',
       refRun: '拉片并拆解',
       refRunning: '拉片中',
       refDone: '已拆解',
@@ -151,6 +211,40 @@ window.__ModuleLoader__.load({
       visualIssues: '{n} 条问题',
     };
     const en = {
+      reviewDesk: "Review",
+      planDesk: "Segment plan",
+      openReview: "Open review workspace",
+      startRendering: "Confirm and generate",
+      assemble: "Assemble selected takes",
+      editIssue: "Re-edit from this note",
+      retakeIssue: "Regenerate selected segment",
+      retakeNotes: "Notes for this take",
+      reviewNoIssues: "No visual review markers",
+      techCheck: "Technical checks",
+      finalCheck: "Final review",
+      humanCheck: "Manual review",
+      notChecked: "Pending",
+      passed: "Passed",
+      failedCheck: "Failed",
+      staleCut: "The player shows the previous cut. Assemble the updated takes to preview them.",
+      segmentCompare: "Compare takes",
+      useVersion: "Use alternate take",
+      currentVersion: "Current take",
+      alternateVersion: "Alternate take",
+      actualReferences: "Character references used",
+      plannedReferences: "Available character references",
+      noReferences: "No available character references",
+      unknownReferences: "Reference use was unrecorded",
+      openingFrame: "Opening action",
+      endingFrame: "Last frame",
+      criticalProps: "Props and blocking",
+      preflightWait: "Complete the storyboard, character profiles and sound plan first.",
+      preflightDuration: "{n} seconds to generate",
+      inspectIssue: "View marker",
+      editTimeline: "Final cut timeline",
+      checkFrame: "Open review frame",
+      approveCut: "Approve current cut",
+      viewDetails: "Editing and review details",
       title: 'Creative studio',
       loading: 'Loading the studio…',
       noProject: 'No project yet',
@@ -174,6 +268,12 @@ window.__ModuleLoader__.load({
       priceBand: 'Price band',
       forbidden: 'Forbidden words (comma separated)',
       extra: 'Extra requirements',
+      audioMode: 'Audio format',
+      projectMode: 'Production type',
+      projectPromotion: 'Product promotion',
+      projectStory: 'Narrative short',
+      dialogueAudio: 'With dialogue',
+      noDialogueAudio: 'No dialogue',
       targetSeconds: 'Target seconds',
       platform: 'Platform',
       aspect: 'Aspect',
@@ -188,7 +288,7 @@ window.__ModuleLoader__.load({
       noHotspot: 'No hotspots yet. Fetch them or type some — without hotspots the producer only follows category sense.',
       hotspotHint: 'Hotspots are the evidence: every idea must be anchored to one, or the gate sends it back.',
       pipeline: 'Pipeline',
-      runAll: 'Run through to the final cut',
+      runAll: 'Prepare segment plan',
       runStage: 'Re-run this stage',
       running: 'Running…',
       agent: { producer: 'Producer', editor: 'Editorial team', reviewer: 'Reviewer' },
@@ -246,6 +346,26 @@ window.__ModuleLoader__.load({
       refTitle: 'Reference hit (teardown)',
       refPlaceholder: 'Paste a Douyin share text or link',
       refLocal: 'or a local video path',
+      advancedReference: 'Advanced shot analysis',
+      projectBriefTab: 'Brief and reference',
+      manualReviewPassed: 'Manually approved',
+      renderQueued: 'Queued',
+      renderCompleted: 'Generated',
+      renderCancelled: 'Cancelled',
+      renderReferenceCount: '{n} character references',
+      renderTextOnly: 'Text to video',
+      retakeSegment: 'Regenerate segment',
+      visualUnavailable: 'Visual review unavailable',
+      referenceLibraryTab: 'Reference studio',
+      shotTimeline: 'Storyboard timeline',
+      editShot: 'Edit',
+      saveShot: 'Save and re-run gates',
+      cancelEdit: 'Cancel',
+      shotPrompt: 'Prompt (60+ characters)',
+      shotSeconds: 'Seconds',
+      shotLine: 'Line in this shot',
+      shotEditSaved: 'Saved; gates re-ran',
+      passedWithNotes: 'Passed with notes',
       refRun: 'Tear down',
       refRunning: 'Tearing down',
       refDone: 'Torn down',
@@ -324,11 +444,11 @@ window.__ModuleLoader__.load({
       },
       pageWide: { padding: '22px 26px 40px', gap: '16px', maxWidth: '1180px', width: '100%', margin: '0 auto' },
       head: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
-      headTitle: { margin: 0, fontSize: '15px', fontWeight: 650, letterSpacing: '0.01em' },
+      headTitle: { margin: 0, fontSize: '24px', fontWeight: 600, letterSpacing: '0.01em' },
       headMeta: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' },
       spacer: { flex: 1, minWidth: '8px' },
       card: {
-        display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px', minWidth: 0,
+        display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', minWidth: 0,
         background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l3)', borderRadius: RADIUS_LG,
       },
       cardTight: { gap: '6px' },
@@ -446,7 +566,7 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
     const emptyForm = () => ({
       title: '', productName: '', category: '', audience: '', sellingPoints: '', tone: '', priceBand: '',
-      forbidden: '', extra: '', targetSeconds: '45', platform: 'douyin', aspect: '9:16',
+      forbidden: '', extra: '', audioMode: 'dialogue', projectMode: 'promotion', targetSeconds: '45', platform: 'douyin', aspect: '9:16',
     });
 
     function NewProject({ t, config, onCreate, busy }) {
@@ -474,6 +594,18 @@ window.__ModuleLoader__.load({
         h(Field, { label: t('extra') }, h('textarea', { style: { ...s.textarea, minHeight: '42px' }, value: form.extra, onChange: set('extra') })),
         h('div', { style: s.row },
           h(Field, { label: t('targetSeconds') }, h('input', { style: { ...s.input, width: '100px' }, type: 'number', min: 10, max: 180, value: form.targetSeconds, onChange: set('targetSeconds') })),
+          h(Field, { label: t('projectMode') },
+            h('select', { style: s.input, value: form.projectMode, onChange: set('projectMode') },
+              h('option', { value: 'promotion' }, t('projectPromotion')),
+              h('option', { value: 'story' }, t('projectStory')),
+            ),
+          ),
+          h(Field, { label: t('audioMode') },
+            h('select', { style: s.input, value: form.audioMode, onChange: set('audioMode') },
+              h('option', { value: 'dialogue' }, t('dialogueAudio')),
+              h('option', { value: 'no-dialogue' }, t('noDialogueAudio')),
+            ),
+          ),
           h(Field, { label: t('platform') },
             h('select', { style: { ...s.input, width: '130px' }, value: form.platform, onChange: set('platform') },
               ['douyin', 'shipinhao', 'xiaohongshu', 'bilibili'].map((value) => h('option', { key: value, value }, value)),
@@ -507,6 +639,8 @@ window.__ModuleLoader__.load({
         priceBand: brief.priceBand ?? '',
         forbidden: (brief.forbidden ?? []).join(','),
         extra: brief.extra ?? '',
+        audioMode: brief.audioMode ?? 'dialogue',
+        projectMode: brief.projectMode ?? 'promotion',
         targetSeconds: String(project.targetSeconds ?? 45),
       });
       const [hotspot, setHotspot] = useState('');
@@ -532,6 +666,19 @@ window.__ModuleLoader__.load({
           ),
           h(Field, { label: t('sellingPoints') }, h('textarea', { style: s.textarea, value: draft.sellingPoints, onChange: set('sellingPoints') })),
           h(Field, { label: t('forbidden') }, h('input', { style: s.input, value: draft.forbidden, onChange: set('forbidden') })),
+          h(Field, { label: t('extra') }, h('textarea', { style: s.textarea, value: draft.extra, onChange: set('extra') })),
+          h(Field, { label: t('projectMode') },
+            h('select', { style: s.input, value: draft.projectMode, onChange: set('projectMode') },
+              h('option', { value: 'promotion' }, t('projectPromotion')),
+              h('option', { value: 'story' }, t('projectStory')),
+            ),
+          ),
+          h(Field, { label: t('audioMode') },
+            h('select', { style: s.input, value: draft.audioMode, onChange: set('audioMode') },
+              h('option', { value: 'dialogue' }, t('dialogueAudio')),
+              h('option', { value: 'no-dialogue' }, t('noDialogueAudio')),
+            ),
+          ),
           h('div', { style: s.row },
             h('button', {
               type: 'button', style: { ...s.btnGhost, ...(busy ? s.disabled : {}) }, disabled: busy,
@@ -544,6 +691,8 @@ window.__ModuleLoader__.load({
                   tone: draft.tone, priceBand: draft.priceBand,
                   forbidden: draft.forbidden.split(/[,，、]/).map((word) => word.trim()).filter(Boolean),
                   extra: draft.extra,
+                  audioMode: draft.audioMode,
+                  projectMode: draft.projectMode,
                 },
               }),
             }, t('save')),
@@ -582,11 +731,12 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
     // 参考爆款（拉片）
     // ---------------------------------------------------------------------
-    function ReferenceCard({ t, project, onRun }) {
+    function ReferenceCard({ t, project, config, onRun }) {
+      const [advanced, setAdvanced] = useState(false);
       const [url, setUrl] = useState('');
       const [local, setLocal] = useState('');
       const ref = project.reference ?? null;
-      const busy = Boolean(ref && ['running', 'analyzing', 'fetching', 'framing', 'asr', 'reviewing'].includes(ref.status));
+      const busy = Boolean(ref && ['running', 'analyzing', 'fetching', 'framing', 'asr', 'rea', 'reviewing'].includes(ref.status));
       const canRun = Boolean(url.trim() || local.trim()) && !busy;
       return h('div', { style: s.card },
         h('div', { style: s.row },
@@ -620,9 +770,13 @@ window.__ModuleLoader__.load({
             type: 'button',
             style: { ...s.btnGhost, ...(canRun ? {} : s.disabled) },
             disabled: !canRun,
-            onClick: () => onRun({ url: url.trim(), localPath: local.trim() }),
+            onClick: () => onRun({ url: url.trim(), localPath: local.trim(), advanced }),
           }, busy ? t('refRunning') : t('refRun')),
         ),
+        config?.hasRea ? h('label', { style: s.row },
+          h('input', { type: 'checkbox', checked: advanced, disabled: busy, onChange: (event) => setAdvanced(event.target.checked) }),
+          h('span', { style: s.label }, t('advancedReference')),
+        ) : null,
         ref?.error ? h('p', { style: s.err }, `${t('refFailed')}：${ref.error}`) : null,
         ref?.report
           ? h('details', null,
@@ -685,7 +839,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!id) return undefined;
         const status = ev?.status ?? '';
-        if (!['running', 'analyzing', 'fetching', 'framing', 'asr', 'reviewing'].includes(status)) return undefined;
+        if (!['running', 'analyzing', 'fetching', 'framing', 'asr', 'rea', 'reviewing'].includes(status)) return undefined;
         let cancelled = false;
         const timer = setTimeout(async () => {
           try {
@@ -736,7 +890,7 @@ window.__ModuleLoader__.load({
         onOpenProject(created.id);
       });
 
-      const running = ['running', 'analyzing', 'fetching', 'framing', 'asr', 'reviewing'].includes(ev?.status ?? '');
+      const running = ['running', 'analyzing', 'fetching', 'framing', 'asr', 'rea', 'reviewing'].includes(ev?.status ?? '');
       const summary = ev?.summary ?? null;
 
       return h('div', { style: s.card },
@@ -970,10 +1124,20 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function StoryboardView({ t, artifact, gate }) {
+    function StoryboardView({ t, artifact, gate, onEdit }) {
       if (!artifact) return h('p', { style: s.meta }, t('noArtifact'));
+      const [editingId, setEditingId] = useState('');
+      const [draft, setDraft] = useState({ prompt: '', durationSec: 0, line: '' });
+      const [notice, setNotice] = useState('');
+      const [busy, setBusy] = useState(false);
       const shots = artifact.shots ?? [];
       const segments = [];
+      let cursor = 0;
+      const timecode = (seconds) => {
+        const minutes = Math.floor(seconds / 60);
+        const remainder = (seconds % 60).toFixed(1).padStart(4, '0');
+        return `${String(minutes).padStart(2, '0')}:${remainder}`;
+      };
       for (const shot of shots) {
         const key = shot.segment ?? shot.scene ?? 'seg';
         let bucket = segments.find((item) => item.id === key);
@@ -981,27 +1145,114 @@ window.__ModuleLoader__.load({
           bucket = { id: key, shots: [], seconds: 0 };
           segments.push(bucket);
         }
-        bucket.shots.push(shot);
-        bucket.seconds += Number(shot.durationSec) || 0;
+        const duration = Number(shot.durationSec) || 0;
+        bucket.shots.push({ shot, start: cursor, end: cursor + duration });
+        bucket.seconds += duration;
+        cursor += duration;
       }
+      const lineBeatOf = (shot) => (artifact.beats ?? []).find((beat) => (shot.claims ?? []).includes(beat.id) && beat.kind === 'line') ?? null;
+      const begin = (shot) => {
+        const beat = lineBeatOf(shot);
+        setDraft({ prompt: shot.prompt ?? '', durationSec: Number(shot.durationSec) || 0, line: beat?.text ?? '' });
+        setEditingId(shot.id);
+        setNotice('');
+      };
+      const save = async (shot) => {
+        if (!onEdit) return;
+        setBusy(true);
+        try {
+          const beat = lineBeatOf(shot);
+          const beatPatch = beat && draft.line.trim() !== String(beat.text ?? '').trim() ? { id: beat.id, text: draft.line } : null;
+          await onEdit({ shot: { id: shot.id, prompt: draft.prompt, durationSec: Number(draft.durationSec) || shot.durationSec }, beat: beatPatch });
+          setEditingId('');
+          setNotice(t('shotEditSaved'));
+        } catch (error) {
+          setNotice(`保存失败：${error.message ?? error}`);
+        } finally {
+          setBusy(false);
+        }
+      };
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { style: s.row },
           h('strong', null, artifact.title ?? ''),
           h('span', { style: s.meta }, `${artifact.targetSeconds ?? '?'}s · ${shots.length} 镜 · ${segments.length} 段`),
           gate?.ok ? Badge({ tone: 'good', children: t('gateOk') }) : gate ? Badge({ tone: 'bad', children: fill(t('gateFail'), { n: (gate.failures ?? []).length }) }) : null,
         ),
+        notice ? h('p', { style: { ...s.meta, fontSize: '12px' } }, notice) : null,
+        segments.length > 0 ? h('div', { role: 'group', 'aria-label': t('shotTimeline') },
+          h('div', { style: { display: 'flex', gap: '4px', minHeight: '24px' } },
+            ...segments.map((segment, index) => h('div', {
+              key: segment.id,
+              title: `${segment.id} · ${segment.seconds.toFixed(1)}s`,
+              style: {
+                flex: segment.seconds || 1, minWidth: '8px', borderRadius: '4px',
+                background: index % 2 ? 'var(--dsw-alias-bg-layer-3)' : 'var(--dsw-alias-bg-layer-2)',
+                borderTop: '2px solid var(--dsw-alias-state-business-primary)',
+              },
+            })),
+          ),
+          h('div', { style: { ...s.row, justifyContent: 'space-between' } },
+            h('span', { style: s.mono }, timecode(0)),
+            h('span', { style: s.mono }, timecode(cursor)),
+          ),
+        ) : null,
         ...segments.map((segment) => h('div', { key: segment.id, style: { ...s.card, ...s.cardTight } },
           h('div', { style: s.row },
             h('strong', { style: { fontSize: '12px' } }, `${t('segment')} ${segment.id}`),
             h('span', { style: s.meta }, `${Math.round(segment.seconds * 10) / 10}s · ${segment.shots.length} ${t('shots')}`),
           ),
-          ...segment.shots.map((shot) => h('div', { key: shot.id, style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
-            h('span', { style: s.meta }, `${shot.id} · ${shot.kind ?? ''} · ${shot.durationSec}s · ${(shot.inFrame ?? []).map((person) => person.who).join('、')}`),
-            h('span', { style: s.mono }, shot.action),
-            h('details', null,
-              h('summary', { style: { ...s.meta, cursor: 'pointer' } }, '提示词'),
-              h('pre', { style: s.pre }, shot.prompt ?? ''),
+          ...segment.shots.map(({ shot, start, end }) => h('div', { key: shot.id, style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+            h('div', { style: s.row },
+              h('span', { style: s.meta }, `${timecode(start)}–${timecode(end)} · ${shot.id} · ${(shot.inFrame ?? []).map((person) => person.who).join('、')}`),
+              h('div', { style: s.spacer }),
+              onEdit && editingId !== shot.id
+                ? h('button', { type: 'button', style: s.btnGhost, onClick: () => begin(shot) }, t('editShot'))
+                : null,
             ),
+            editingId === shot.id
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '4px 0' } },
+                h('span', { style: s.label }, t('shotPrompt')),
+                h('textarea', {
+                  style: { ...s.textarea, minHeight: '78px' },
+                  value: draft.prompt,
+                  onChange: (event) => setDraft({ ...draft, prompt: event.target.value }),
+                }),
+                h('div', { style: s.row },
+                  h('span', { style: s.label }, t('shotSeconds')),
+                  h('input', {
+                    style: { ...s.input, width: '78px' },
+                    type: 'number', step: '0.5', min: '0.5',
+                    value: draft.durationSec,
+                    onChange: (event) => setDraft({ ...draft, durationSec: event.target.value }),
+                  }),
+                ),
+                lineBeatOf(shot)
+                  ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+                    h('span', { style: s.label }, t('shotLine')),
+                    h('input', {
+                      style: s.input,
+                      value: draft.line,
+                      onChange: (event) => setDraft({ ...draft, line: event.target.value }),
+                    }),
+                  )
+                  : null,
+                h('div', { style: s.row },
+                  h('button', {
+                    type: 'button',
+                    style: { ...s.btn, ...(busy ? s.disabled : {}) },
+                    disabled: busy,
+                    onClick: () => void save(shot),
+                  }, t('saveShot')),
+                  h('button', { type: 'button', style: s.btnGhost, onClick: () => setEditingId('') }, t('cancelEdit')),
+                ),
+              )
+              : [
+                h('span', { key: 'a', style: s.mono }, shot.action),
+                h('details', { key: 'p' },
+                  h('summary', { style: { ...s.meta, cursor: 'pointer' } }, '提示词'),
+                  h('pre', { style: s.pre }, shot.prompt ?? ''),
+                ),
+              ],
           )),
         )),
       );
@@ -1052,20 +1303,35 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function RenderView({ t, projectId, render }) {
+    function RenderView({ t, projectId, render, onRerender, running }) {
       const tasks = render?.tasks ?? [];
       if (tasks.length === 0) return h('p', { style: s.meta }, t('noArtifact'));
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+      const labels = {
+        queued: t('renderQueued'), pending: t('renderQueued'), completed: t('renderCompleted'),
+        failed: STATUS_LABEL.failed, cancelled: t('renderCancelled'),
+        processing: t('running'), running: t('running'), in_progress: t('running'),
+      };
+      const completed = tasks.filter((task) => task.status === 'completed' && task.file).length;
+      return h('div', { style: { ...s.grid, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))' } },
+        h('div', { style: { ...s.row, gridColumn: '1 / -1' } },
+          h('progress', { 'aria-label': t('segment'), max: tasks.length, value: completed, style: { flex: 1, accentColor: 'var(--dsw-alias-state-business-primary)' } }),
+          h('span', { style: s.meta }, `${completed} / ${tasks.length}`),
+        ),
         ...tasks.map((task) => h('div', { key: task.segmentId, style: { ...s.card, ...s.cardTight } },
           h('div', { style: s.row },
             h('strong', { style: { fontSize: '12px' } }, task.segmentId),
-            Badge({ tone: TONE[task.status === 'completed' ? 'done' : task.status === 'failed' ? 'failed' : 'running'] ?? 'dim', children: task.status }),
+            Badge({ tone: TONE[task.status === 'completed' ? 'done' : task.status === 'failed' ? 'failed' : 'running'] ?? 'dim', children: labels[task.status] ?? task.status }),
             h('span', { style: s.meta }, `${task.duration ?? task.seconds ?? '?'}s${task.providerLabel ? ` · ${task.providerLabel}` : ''}`),
+            task.referenceCount == null ? null : h('span', { style: s.meta },
+              task.referenceCount > 0 ? fill(t('renderReferenceCount'), { n: task.referenceCount }) : t('renderTextOnly')),
             task.progress ? h('span', { style: s.meta }, `${task.progress}%`) : null,
+            onRerender && !running && tasks.every((other) => other.segmentId === task.segmentId || other.status === 'completed' && other.file)
+              ? h('button', { type: 'button', style: s.btnGhost, onClick: () => onRerender(task.segmentId) }, t('retakeSegment'))
+              : null,
           ),
           task.error ? h('p', { style: s.err }, task.error) : null,
           task.file
-            ? h('video', { style: { ...s.video, maxHeight: '260px' }, src: `${FILE}?id=${encodeURIComponent(projectId)}&kind=segment&segmentId=${encodeURIComponent(task.segmentId)}`, controls: true, preload: 'metadata' })
+            ? h('video', { style: { ...s.video, width: 'auto', height: '280px', maxWidth: '100%', alignSelf: 'center' }, src: `${FILE}?id=${encodeURIComponent(projectId)}&kind=segment&segmentId=${encodeURIComponent(task.segmentId)}`, controls: true, preload: 'metadata' })
             : null,
         )),
       );
@@ -1095,8 +1361,8 @@ window.__ModuleLoader__.load({
             h('div', { style: s.row },
               h('span', { style: s.sectionTitle }, t('visualCheck')),
               Badge({
-                tone: visual.pass ? 'good' : 'bad',
-                children: visual.pass ? t('visualPass') : fill(t('visualIssues'), { n: (visual.issues ?? []).length }),
+                tone: visual.error ? 'warn' : visual.pass ? 'good' : 'bad',
+                children: visual.error ? t('visualUnavailable') : visual.pass ? t('visualPass') : fill(t('visualIssues'), { n: (visual.issues ?? []).length }),
               }),
               visual.error ? h('span', { style: s.meta }, visual.error) : null,
             ),
@@ -1138,28 +1404,305 @@ window.__ModuleLoader__.load({
       );
     }
 
+    const reviewStyles = {
+      layout: {
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))',
+        gap: '16px', alignItems: 'start',
+      },
+      title: { fontSize: '16px', lineHeight: '24px', fontWeight: 600, margin: 0 },
+      player: {
+        display: 'block', width: 'auto', height: 'clamp(220px, 46vh, 480px)', maxWidth: '100%',
+        margin: '0 auto', borderRadius: RADIUS_MD, background: '#111',
+      },
+      track: { display: 'flex', gap: '4px', overflowX: 'auto', padding: '2px' },
+      comparison: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: '12px' },
+    };
+
+    function reviewTime(seconds) {
+      const tenths = Math.round(Math.max(0, Number(seconds) || 0) * 10);
+      return `${String(Math.floor(tenths / 600)).padStart(2, '0')}:${(tenths % 600 / 10).toFixed(1).padStart(4, '0')}`;
+    }
+
+    function ReviewDesk({ t, data, running, onRun, onRerender, onChoose, onDecide }) {
+      const { project, plan = [], timeline = [], versions = {}, render, artifacts = {} } = data;
+      const edit = project.stages?.edit ?? {};
+      const tasks = render?.tasks ?? [];
+      const player = useRef(null);
+      const left = useRef(null);
+      const right = useRef(null);
+      const pendingSeek = useRef(0);
+      const [selectedId, setSelectedId] = useState(null);
+      const [alternateId, setAlternateId] = useState(null);
+      const [activeIssue, setActiveIssue] = useState(null);
+      const [sourceTime, setSourceTime] = useState(0);
+      const [retakeDraft, setRetakeDraft] = useState({});
+      const [comparisonDuration, setComparisonDuration] = useState({});
+      const selection = plan.find((segment) => segment.id === selectedId) ?? plan[0];
+      const task = tasks.find((item) => item.segmentId === selection?.id);
+      const takes = versions[selection?.id] ?? [];
+      const current = takes.find((item) => item.current);
+      const other = takes.find((item) => !item.current && item.id === alternateId) ?? takes.find((item) => !item.current);
+      const cutUrl = `${FILE}?id=${encodeURIComponent(project.id)}&kind=final&v=${encodeURIComponent(edit.outputAt ?? edit.review?.at ?? '')}`;
+      const ready = plan.length > 0 && ['storyboard', 'characters', 'voice'].every((stage) => ['done', 'skipped'].includes(project.stages?.[stage]?.status));
+      const allRendered = plan.length > 0 && plan.every((segment) => tasks.some((item) => item.segmentId === segment.id && item.status === 'completed' && item.file));
+      const pending = project.pendingReview?.stage === 'edit' ? project.pendingReview : null;
+      const visual = edit.visual?.issues ?? [];
+      const issues = [...visual.map((issue) => ({ ...issue, visual: true })), ...(pending?.issues ?? []).filter((issue) =>
+        !visual.some((item) => item.where === issue.where && item.problem === issue.problem),
+      )].slice(0, 14);
+      const setVideoTime = (video, time) => {
+        if (!video || !Number.isFinite(video.duration)) return;
+        video.currentTime = Math.min(video.duration, Math.max(0, time));
+      };
+      const seekComparison = (time) => {
+        setSourceTime(time);
+        for (const ref of [left, right]) {
+          ref.current?.pause();
+          setVideoTime(ref.current, time);
+        }
+      };
+      const seekCut = (time, span, index = null) => {
+        const segmentChanged = span && span.segmentId !== selection?.id;
+        setActiveIssue(index);
+        if (span) {
+          setSelectedId(span.segmentId);
+          const nextTime = span.sourceStart + Math.max(0, time - span.start);
+          if (segmentChanged) {
+            setSourceTime(nextTime);
+            setComparisonDuration({});
+          } else seekComparison(nextTime);
+        }
+        pendingSeek.current = time;
+        setVideoTime(player.current, time);
+      };
+      const canRetake = !running && Boolean(selection && task) && plan.every((segment) =>
+        segment.id === selection.id || tasks.some((item) => item.segmentId === segment.id && item.status === 'completed' && item.file),
+      );
+      const displayCheck = (label, state) => Badge({
+        tone: state == null ? 'dim' : state ? 'good' : 'bad',
+        children: `${t(label)} · ${t(state == null ? 'notChecked' : state ? 'passed' : 'failedCheck')}`,
+      });
+      const takeVideo = (take, ref, label) => take ? h('div', { key: take.id, style: { ...s.card, ...s.cardTight } },
+        h('strong', { style: s.label }, t(label)),
+        h('video', {
+          ref, controls: true, preload: 'metadata',
+          src: `${FILE}?id=${encodeURIComponent(project.id)}&kind=segment-version&segmentId=${encodeURIComponent(selection.id)}&version=${encodeURIComponent(take.id)}`,
+          style: { ...reviewStyles.player, height: '240px' },
+          onLoadedMetadata: (event) => {
+            setVideoTime(event.currentTarget, sourceTime);
+            const duration = event.currentTarget.duration;
+            setComparisonDuration((previous) => ({ ...previous, [take.id]: duration }));
+          },
+        }),
+      ) : null;
+      const duration = Number(edit.duration) || timeline.at(-1)?.end || 0;
+      const locateIssue = (issue) => {
+        const where = issue.where ?? '';
+        const sequence = (/第\s*([123])\s*张/u.exec(where) ?? /(?:frame|image)\s*([123])/i.exec(where))?.[1];
+        const frame = Number(/check-(12|50|88)/i.exec(where)?.[1]) || [0, 12, 50, 88][Number(sequence)];
+        const timestamp = frame && duration ? Math.min(duration, Math.max(0.1, duration * frame / 100)) : null;
+        const span = timestamp == null ? null : timeline.find((item) => timestamp >= item.start && timestamp < item.end) ?? timeline.at(-1);
+        return { frame, timestamp, span };
+      };
+      const issueForSegment = issues[activeIssue];
+      const issueNote = issueForSegment && issueForSegment.action !== 'edit' && locateIssue(issueForSegment).span?.segmentId === selection?.id
+        ? [issueForSegment.problem, issueForSegment.fix].filter(Boolean).join('\n') : '';
+      const suggestedNote = retakeDraft[selection?.id] ?? issueNote;
+      const markers = [...new Map(issues.map((issue, index) => ({ ...locateIssue(issue), index }))
+        .filter((marker) => marker.timestamp != null).map((marker) => [marker.frame, marker])).values()];
+      const comparisonLimit = Math.min(...[current, other].filter(Boolean).map((take) => Number(comparisonDuration[take.id]) || Infinity));
+      const renderSeconds = plan.reduce((sum, item) => sum + (item.generationSeconds ?? item.seconds), 0);
+
+      return h('div', { style: { display: 'grid', gap: '16px' } },
+        h('div', { style: reviewStyles.layout },
+          h('section', { style: s.card },
+            h('div', { style: s.row },
+              h('h3', { style: reviewStyles.title }, t('reviewDesk')),
+              displayCheck('techCheck', edit.openfilm?.ok),
+              displayCheck('finalCheck', edit.review?.pass),
+              displayCheck('humanCheck', edit.status === 'done' && edit.note ? true : null),
+            ),
+            edit.stale ? h('p', { style: s.warnText }, t('staleCut')) : null,
+            project.finalFile ? h('video', {
+              key: cutUrl, ref: player, src: cutUrl, controls: true, preload: 'metadata',
+              style: reviewStyles.player,
+              onLoadedMetadata: (event) => setVideoTime(event.currentTarget, pendingSeek.current),
+            }) : h('p', { style: s.meta }, t('noFinal')),
+            timeline.length ? h('div', { role: 'group', 'aria-label': t('editTimeline'), style: reviewStyles.track },
+              ...timeline.map((span, index) => h('button', {
+                key: `${span.segmentId}-${index}`, type: 'button',
+                'aria-pressed': selection?.id === span.segmentId,
+                onClick: () => seekCut(span.start, span),
+                style: {
+                  ...(selection?.id === span.segmentId ? s.btn : s.btnGhost),
+                  flex: `${Math.max(1, span.end - span.start)} 0 104px`, whiteSpace: 'nowrap',
+                },
+              }, `${reviewTime(span.start)} · ${span.segmentId}`)),
+            ) : null,
+            markers.length ? h('div', { style: { position: 'relative', height: '24px', margin: '0 24px' } },
+              ...markers.map(({ frame, timestamp, span, index }) => h('button', {
+                key: frame, type: 'button', style: {
+                  ...(activeIssue === index ? s.btn : s.btnGhost), position: 'absolute', top: 0,
+                  left: `${100 * timestamp / duration}%`, transform: 'translateX(-50%)', whiteSpace: 'nowrap',
+                },
+                'aria-label': `${t('inspectIssue')} ${reviewTime(timestamp)}`,
+                onClick: () => seekCut(timestamp, span, index),
+              }, reviewTime(timestamp))),
+            ) : null,
+            h('div', { style: s.row },
+              allRendered ? h('button', { type: 'button', style: s.btn, disabled: running, onClick: () => onRun('edit') }, t('assemble')) : null,
+              pending && project.finalFile && !edit.stale ? h('button', {
+                type: 'button', style: s.btnGhost, disabled: running,
+                onClick: () => onDecide('approve', t('approveCut'), 'edit'),
+              }, t('approveCut')) : null,
+            ),
+          ),
+          h('section', { style: s.card },
+            h('h3', { style: reviewStyles.title }, t('visualCheck')),
+            issues.length === 0 ? h('p', { style: s.meta }, t('reviewNoIssues')) : null,
+            ...issues.map((issue, index) => {
+              const { frame, timestamp, span } = locateIssue(issue);
+              const action = issue.action ?? (issue.visual ? 'inspect' : 'edit');
+              return h('div', { key: index, style: { ...s.card, ...s.cardTight } },
+                h('div', { style: s.row },
+                  timestamp != null ? h('button', {
+                    type: 'button', style: activeIssue === index ? s.btn : s.btnGhost,
+                    onClick: () => seekCut(timestamp, span, index),
+                  }, `${reviewTime(timestamp)}${span ? ` · ${span.segmentId}` : ''}`) : null,
+                  issue.visual && frame ? h('a', {
+                    style: s.label, target: '_blank', rel: 'noopener noreferrer',
+                    href: `${FILE}?id=${encodeURIComponent(project.id)}&kind=check&name=check-${frame}.jpg&v=${encodeURIComponent(edit.outputAt ?? '')}`,
+                  }, t('checkFrame')) : null,
+                ),
+                h('strong', { style: s.label }, issue.problem || issue.where),
+                issue.fix ? h('p', { style: { ...s.meta, margin: 0 } }, issue.fix) : null,
+                action === 'edit' && allRendered ? h('button', {
+                  type: 'button', style: { ...s.btnGhost, alignSelf: 'flex-start' }, disabled: running,
+                  onClick: () => onRun('edit', [issue.problem, issue.fix].filter(Boolean).join('\n')),
+                }, t('editIssue')) : null,
+                action === 'segment' && span ? h('button', {
+                  type: 'button', style: { ...s.btnGhost, alignSelf: 'flex-start' },
+                  onClick: () => seekCut(timestamp, span, index),
+                }, t('inspectIssue')) : null,
+              );
+            }),
+          ),
+        ),
+        h('section', { style: s.card },
+          h('div', { style: s.row },
+            h('h3', { style: reviewStyles.title }, t('planDesk')),
+            plan.length ? h('span', { style: s.meta }, fill(t('preflightDuration'), { n: Number(renderSeconds.toFixed(2)) })) : null,
+            h('div', { style: s.spacer }),
+            !allRendered && ready ? h('button', {
+              type: 'button', style: s.btn, disabled: running, onClick: () => onRun('render'),
+            }, t('startRendering')) : null,
+          ),
+          !ready && !allRendered ? h('p', { style: s.meta }, t('preflightWait')) : null,
+          plan.length > 0 ? h('div', { style: reviewStyles.track },
+            ...plan.map((item) => h('button', {
+              key: item.id, type: 'button', style: selection?.id === item.id ? s.btn : s.btnGhost,
+              'aria-pressed': selection?.id === item.id,
+              onClick: () => {
+                const span = timeline.find((entry) => entry.segmentId === item.id);
+                if (span) seekCut(span.start, span);
+                else { setSelectedId(item.id); setSourceTime(0); setComparisonDuration({}); }
+              },
+            }, `${item.id} · ${item.seconds}s`)),
+          ) : null,
+          selection ? h('div', { style: reviewStyles.layout },
+            h('div', { style: { display: 'grid', gap: '8px' } },
+              h('span', { style: s.label }, selection.people.join(' · ')),
+              ...[['openingFrame', selection.opening], ['endingFrame', selection.ending]]
+                .map(([label, value]) => h('div', { key: label }, h('strong', { style: s.label }, t(label)), h('p', { style: { ...s.meta, margin: 0 } }, value || '—'))),
+              selection.props.length ? h('details', null,
+                h('summary', { style: s.label }, t('criticalProps')),
+                ...selection.props.map((text) => h('p', { key: text, style: s.meta }, text)),
+              ) : null,
+            ),
+            h('div', null,
+              h('strong', { style: s.label }, t(Array.isArray(task?.referenceNames) ? 'actualReferences' : 'plannedReferences')),
+              h('div', { style: s.row },
+                ...(task?.referenceNames ?? selection.references).map((name) => h('figure', {
+                  key: name, style: { margin: 0 },
+                }, h('img', {
+                  src: `${FILE}?id=${encodeURIComponent(project.id)}&kind=portrait&name=${encodeURIComponent(name)}`,
+                  alt: name, loading: 'lazy', style: { width: '64px', height: '64px', objectFit: 'cover', borderRadius: RADIUS_MD },
+                }), h('figcaption', { style: s.meta }, name))),
+              ),
+              task?.referenceCount === 0 ? h('p', { style: s.meta }, t('renderTextOnly'))
+                : task?.file && !Array.isArray(task.referenceNames) ? h('p', { style: s.meta },
+                  task.referenceCount == null ? t('unknownReferences') : fill(t('renderReferenceCount'), { n: task.referenceCount }))
+                  : !(task?.referenceNames ?? selection.references).length ? h('p', { style: s.meta }, t('noReferences')) : null,
+              canRetake ? h('div', { style: { display: 'grid', gap: '8px', justifyItems: 'start' } },
+                h('textarea', {
+                  style: s.textarea, 'aria-label': t('retakeNotes'), placeholder: t('retakeNotes'),
+                  value: suggestedNote, maxLength: 2000,
+                  onChange: (event) => {
+                    const note = event.target.value;
+                    setRetakeDraft((previous) => ({ ...previous, [selection.id]: note }));
+                  },
+                }),
+                h('button', { type: 'button', style: s.btnGhost, onClick: () => onRerender(selection.id, suggestedNote) }, t('retakeIssue')),
+              ) : null,
+            ),
+          ) : null,
+        ),
+        current ? h('section', { style: s.card },
+          h('div', { style: s.row },
+            h('h3', { style: reviewStyles.title }, t('segmentCompare')),
+            other ? h('select', {
+              style: { ...s.input, flex: 1, minWidth: '160px', maxWidth: '100%' }, 'aria-label': t('alternateVersion'), value: other.id,
+              onChange: (event) => setAlternateId(event.target.value),
+            }, takes.filter((take) => !take.current).map((take, index) =>
+              h('option', { value: take.id, key: take.id }, `${t('alternateVersion')} ${index + 1} · ${take.id}`),
+            )) : null,
+            other ? h('button', {
+              type: 'button', style: s.btnGhost, disabled: running, onClick: () => onChoose(selection.id, other.id),
+            }, t('useVersion')) : null,
+          ),
+          other && Number.isFinite(comparisonLimit) ? h('label', { style: s.row },
+            h('span', { style: s.mono }, reviewTime(sourceTime)),
+            h('input', {
+              type: 'range', min: 0, max: comparisonLimit, step: 0.1, value: Math.min(sourceTime, comparisonLimit),
+              'aria-label': t('segmentCompare'), style: { flex: 1 }, onChange: (event) => seekComparison(Number(event.target.value)),
+            }),
+          ) : null,
+          h('div', { style: reviewStyles.comparison }, takeVideo(current, left, 'currentVersion'), takeVideo(other, right, 'alternateVersion')),
+        ) : null,
+        artifacts.edit ? h('details', { style: s.card },
+          h('summary', { style: s.label }, t('viewDetails')),
+          h(EditView, { t, projectId: project.id, edl: artifacts.edit, project }),
+        ) : null,
+      );
+    }
+
     function StageDetail({ t, stage, ctx, config }) {
       if (stage === 'idea') return h(IdeaView, { t, artifact: ctx.artifacts.idea, project: ctx.project, onChoose: ctx.chooseIdea, onRerun: () => ctx.run('story') });
       if (stage === 'story') return h(StoryView, { t, artifact: ctx.artifacts.story });
-      if (stage === 'storyboard') return h(StoryboardView, { t, artifact: ctx.artifacts.storyboard, gate: ctx.project.stages.storyboard?.gate });
+      if (stage === 'storyboard') return h(StoryboardView, { t, artifact: ctx.artifacts.storyboard, gate: ctx.project.stages.storyboard?.gate, onEdit: ctx.editStoryboard });
       if (stage === 'characters') return h(CharactersView, { t, projectId: ctx.project.id, artifact: ctx.artifacts.characters, style: config });
       if (stage === 'voice') return h(VoiceView, { t, artifact: ctx.artifacts.voice, catalog: config?.voices });
-      if (stage === 'render') return h(RenderView, { t, projectId: ctx.project.id, render: ctx.render });
+      if (stage === 'render') return h(RenderView, { t, projectId: ctx.project.id, render: ctx.render, onRerender: ctx.rerenderSegment, running: ctx.running });
       return h(EditView, { t, projectId: ctx.project.id, edl: ctx.artifacts.edit, project: ctx.project, config });
     }
 
     // ---------------------------------------------------------------------
     // 流水线
     // ---------------------------------------------------------------------
-    function Pipeline({ t, data, config, onRun, onDecide, running }) {
+    function Pipeline({ t, data, config, onRun, onDecide, onRerender, onOpenReview, running }) {
       const [open, setOpen] = useState('');
       const [note, setNote] = useState('');
       const project = data.project;
       const stages = config?.stages ?? [];
+      const completed = stages.filter((stage) => ['done', 'skipped'].includes(project.stages?.[stage.id]?.status)).length;
+      const next = stages.find((stage) => stage.id === (project.running?.stage || project.pendingReview?.stage))
+        ?? stages.find((stage) => !['done', 'skipped'].includes(project.stages?.[stage.id]?.status));
       const ctx = {
         project,
         artifacts: data.artifacts ?? {},
         render: data.render,
+        running,
+        rerenderSegment: onRerender,
         chooseIdea: async (index) => {
           try {
             await call('chooseIdea', { id: project.id, index });
@@ -1168,19 +1711,28 @@ window.__ModuleLoader__.load({
           }
         },
         run: (stage) => onRun(stage),
+        editStoryboard: async (patch) => {
+          const response = await call('updateStoryboard', { id: project.id, ...patch });
+          return response?.value ?? response;
+        },
       };
 
       return h('div', { style: s.card },
         h('div', { style: s.row },
-          h('span', { style: s.sectionTitle }, t('pipeline')),
+          h('h3', { style: { margin: 0, fontSize: '16px' } }, t('pipeline')),
+          next ? Badge({ tone: project.pendingReview ? 'bad' : project.running ? 'warn' : 'dim', children: next.label }) : null,
           h('div', { style: s.spacer }),
           h('button', {
             type: 'button',
             style: { ...s.btn, ...(running ? s.disabled : {}) },
             disabled: running,
-            onClick: () => onRun(),
-          }, running ? t('running') : t('runAll')),
+            onClick: () => ['render', 'edit'].includes(next?.id) ? onOpenReview() : onRun(),
+          }, running ? t('running') : ['render', 'edit'].includes(next?.id) ? t('openReview') : t('runAll')),
         ),
+        stages.length > 0 ? h('div', { style: s.row },
+          h('progress', { 'aria-label': t('pipeline'), value: completed, max: stages.length, style: { flex: 1, minWidth: 100, accentColor: 'var(--dsw-alias-state-business-primary)' } }),
+          h('span', { style: s.meta }, `${completed} / ${stages.length}`),
+        ) : null,
         ...stages.map((stage, index) => {
           const record = project.stages?.[stage.id] ?? { status: 'empty' };
           const tone = TONE[record.status] ?? 'dim';
@@ -1193,23 +1745,26 @@ window.__ModuleLoader__.load({
               h('span', { style: s.stageName }, stage.label),
               Badge({ tone: 'dim', children: AGENT_LABEL[stage.agent] ?? stage.agent }),
               Badge({ tone, children: STATUS_LABEL[record.status] ?? record.status }),
-              record.review?.score !== undefined && record.review?.score !== null ? Badge({ tone: record.review.pass ? 'good' : 'warn', children: fill(t('score'), { n: record.review.score }) }) : null,
+              record.status === 'done' && record.note
+                ? Badge({ tone: 'good', children: t('manualReviewPassed') })
+                : record.review?.score != null ? Badge({ tone: record.review.pass ? 'good' : 'warn', children: fill(t('score'), { n: record.review.score }) }) : null,
+              record.review?.accepted === 'with-notes' ? Badge({ tone: 'dim', children: t('passedWithNotes') }) : null,
               record.attempts > 1 ? h('span', { style: s.meta }, fill(t('attempt'), { n: record.attempts })) : null,
               record.gate?.ok === false ? h('span', { style: s.meta }, fill(t('gateFail'), { n: (record.gate.failures ?? []).length })) : null,
               h('div', { style: s.spacer }),
               h('button', {
                 type: 'button', style: s.btnGhost,
-                disabled: running,
+                'aria-expanded': isOpen,
                 onClick: () => setOpen(isOpen ? '' : stage.id),
               }, isOpen ? t('hideDetail') : t('viewDetail')),
               h('button', {
                 type: 'button', style: { ...s.btnGhost, ...(running ? s.disabled : {}) },
                 disabled: running,
-                onClick: () => onRun(stage.id),
-              }, t('runStage')),
+                onClick: () => stage.id === 'render' || stage.id === 'edit' ? onOpenReview() : onRun(stage.id),
+              }, stage.id === 'render' || stage.id === 'edit' ? t('openReview') : t('runStage')),
             ),
             record.error ? h('p', { style: s.err }, `${t('error')}：${record.error}`) : null,
-            (record.issues ?? []).length > 0
+            !pending && (record.issues ?? []).length > 0
               ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
                 h('span', { style: s.label }, t('issues')),
                 ...(record.issues ?? []).slice(0, 4).map((issue, issueIndex) => h('p', { key: issueIndex, style: s.warnText }, `· ${issue}`)),
@@ -1259,6 +1814,7 @@ window.__ModuleLoader__.load({
       const pageStyle = wide ? { ...s.page, ...s.pageWide } : s.page;
       const [config, setConfig] = useState(null);
       const [projects, setProjects] = useState([]);
+      const [workspaceTab, setWorkspaceTab] = useState('production');
       const [selected, setSelected] = useState('');
       const [data, setData] = useState(null);
       const [busy, setBusy] = useState(false);
@@ -1378,7 +1934,7 @@ window.__ModuleLoader__.load({
         } catch {
           /* 通知失败不影响面板 */
         }
-        setNotice(`${t('reviewPending')}：${pending.stageLabel ?? ''}`);
+
       }, [data?.project?.pendingReview, t]);
 
       const remember = (id) => {
@@ -1419,12 +1975,14 @@ window.__ModuleLoader__.load({
             priceBand: form.priceBand,
             forbidden: form.forbidden.split(/[,，、]/).map((word) => word.trim()).filter(Boolean),
             extra: form.extra,
+            audioMode: form.audioMode,
+            projectMode: form.projectMode,
           },
         });
         remember(created.id);
         await loadProjects(created.id);
-        if (startNow) await call('run', { id: created.id });
-        setNotice(startNow ? '已开跑：创意 → 剧情 → 分镜 → 人物 → 配音 → 出片 → 剪辑' : '');
+        if (startNow) await call('run', { id: created.id, stopBeforeRender: true });
+        setNotice(startNow ? '已开跑：创意 → 剧情 → 分镜 → 人物 → 配音。确认分段清单后出片。' : '');
       });
 
       const removeProject = () => guard(async () => {
@@ -1443,11 +2001,22 @@ window.__ModuleLoader__.load({
         setNotice(t('removed'));
       });
 
-      const run = (stage) => guard(async () => {
+      const run = (stage, note) => guard(async () => {
         if (!selected) return;
         // 单个阶段按钮 = 只跑这一阶段（看清一步再走下一步）；顶部大按钮 = 一路跑到成片。
-        await call('run', { id: selected, ...(stage ? { stage, only: true } : {}) });
-        setNotice(t('running'));
+        await call('run', { id: selected, ...(stage ? { stage, only: true, note } : { stopBeforeRender: true }) });
+        await refresh(selected);
+      });
+
+      const rerenderSegment = (segmentId, note) => guard(async () => {
+        if (!selected) return;
+        await call('rerenderSegment', { id: selected, segmentId, compare: true, note });
+        await refresh(selected);
+      });
+
+      const chooseVersion = (segmentId, version) => guard(async () => {
+        if (!selected) return;
+        await call('chooseSegmentVersion', { id: selected, segmentId, version });
         await refresh(selected);
       });
 
@@ -1522,7 +2091,7 @@ window.__ModuleLoader__.load({
           : null,
         h('button', {
           type: 'button', style: s.btnGhost,
-          onClick: () => { selectedRef.current = ''; setSelected(''); setData(null); },
+          onClick: () => { selectedRef.current = ''; setSelected(''); setData(null); setWorkspaceTab('production'); },
         }, t('newProject')),
         h('button', { type: 'button', style: s.btnGhost, onClick: enableNotify }, notifyAllowed ? t('notifyOn') : t('notifyOff')),
       );
@@ -1530,29 +2099,56 @@ window.__ModuleLoader__.load({
       if (!config && !error) return h('div', { style: pageStyle }, header, h('p', { style: s.meta }, t('loading')));
       if (!config && error) return h('div', { style: pageStyle }, header, h('p', { style: s.err }, error));
 
-      const running = Boolean(data?.project?.running) || Object.values(data?.project?.stages ?? {}).some((stage) => stage?.status === 'running');
+      const running = Boolean(data?.project?.running);
       const project = data?.project;
 
       return h('div', { style: pageStyle },
         header,
         error ? h('p', { style: s.err }, error) : null,
         notice ? h('p', { style: s.ok }, notice) : null,
-        h(ReferenceStudio, {
-          t,
-          onOpenProject: async (newId) => {
-            remember(newId);
-            await loadProjects(newId);
-          },
-        }),
-        !selected || !project
-          ? h(NewProject, { t, config, onCreate: create, busy })
-          : h(React.Fragment, null,
-            h(BriefCard, { t, project, config, onSave: saveBrief, onHotspots: grabHotspots, onAddHotspot: addHotspot, busy }),
-            h(ReferenceCard, { t, project, onRun: runReference }),
-            h(Pipeline, { t, data, config, onRun: run, onDecide: decide, running }),
-            h('div', { style: { ...s.card, ...s.cardTight } },
+        project ? h('section', { style: { ...s.card, borderTop: '2px solid var(--dsw-alias-state-business-primary)' } },
+          h('h3', { style: { margin: 0, fontSize: '20px', lineHeight: '28px', overflowWrap: 'anywhere' } }, project.title),
+          h('div', { style: s.row },
+            ...[project.platform, project.aspect, project.resolution, project.brief?.projectMode === 'story' ? t('projectStory') : null, project.brief?.audioMode === 'no-dialogue' ? t('noDialogueAudio') : null, project.targetSeconds ? `${project.targetSeconds}s` : null]
+              .filter(Boolean).map((value) => h('span', { key: value, style: s.chip }, value)),
+          ),
+        ) : null,
+        h('nav', { 'aria-label': t('title'), style: s.row },
+          ...[
+            ['production', t('pipeline')],
+            ...(project ? [['review', t('reviewDesk')], ['brief', t('projectBriefTab')]] : []),
+            ['library', t('referenceLibraryTab')],
+          ].map(([key, label]) => h('button', {
+            key,
+            type: 'button',
+            'aria-pressed': workspaceTab === key,
+            style: workspaceTab === key ? s.btn : s.btnGhost,
+            onClick: () => setWorkspaceTab(key),
+          }, label)),
+        ),
+        workspaceTab === 'library'
+          ? h(ReferenceStudio, {
+            t,
+            onOpenProject: async (newId) => {
+              remember(newId);
+              setWorkspaceTab('production');
+              await loadProjects(newId);
+            },
+          })
+          : !project
+            ? h(NewProject, { t, config, onCreate: create, busy })
+            : workspaceTab === 'brief'
+              ? h(React.Fragment, null,
+                h(ReferenceCard, { key: project.id, t, project, config, onRun: runReference }),
+                h(BriefCard, { key: project.id, t, project, config, onSave: saveBrief, onHotspots: grabHotspots, onAddHotspot: addHotspot, busy }),
+              )
+              : workspaceTab === 'review'
+                ? h(ReviewDesk, { key: project.id, t, data, running: running || busy, onRun: run, onRerender: rerenderSegment, onChoose: chooseVersion, onDecide: decide })
+                : h(React.Fragment, null,
+            h(Pipeline, { key: project.id, t, data, config, onRun: run, onDecide: decide, onRerender: rerenderSegment, onOpenReview: () => setWorkspaceTab('review'), running: running || busy }),
+            h('details', { style: { ...s.card, ...s.cardTight } },
+              h('summary', { style: s.sectionTitle }, t('events')),
               h('div', { style: s.row },
-                h('span', { style: s.sectionTitle }, t('events')),
                 h('div', { style: s.spacer }),
                 h('span', { style: s.mono }, data?.dir ?? ''),
               ),

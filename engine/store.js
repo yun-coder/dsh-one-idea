@@ -75,6 +75,8 @@ export function newProject(input = {}) {
       forbidden: Array.isArray(input.brief?.forbidden) ? input.brief.forbidden.map(String) : [],
       hotspots: Array.isArray(input.brief?.hotspots) ? input.brief.hotspots.slice(0, 30) : [],
       extra: String(input.brief?.extra ?? '').trim(),
+      audioMode: input.brief?.audioMode === 'no-dialogue' ? 'no-dialogue' : 'dialogue',
+      projectMode: input.brief?.projectMode === 'story' ? 'story' : 'promotion',
     },
     chosenIdea: null,
     stages: Object.fromEntries(STAGE_IDS.map((stage) => [stage, emptyStage()])),
@@ -92,7 +94,7 @@ export function event(project, entry) {
   project.updatedAt = Date.now();
 }
 
-export function createStore({ root }) {
+export function createStore({ root, isRunning = () => false }) {
   const dirOf = (id) => join(root, String(id));
   const projectFile = (id) => join(dirOf(id), 'project.json');
   /** id -> Promise，串行化同一项目的写入，避免两个路由同时改一份 project.json。 */
@@ -104,13 +106,14 @@ export function createStore({ root }) {
     const current = new Promise((resolve) => {
       release = resolve;
     });
-    locks.set(id, previous.then(() => current));
+    const tail = previous.then(() => current);
+    locks.set(id, tail);
     await previous;
     try {
       return await fn();
     } finally {
       release();
-      if (locks.get(id) === current) locks.delete(id);
+      if (locks.get(id) === tail) locks.delete(id);
     }
   };
 
@@ -133,10 +136,11 @@ export function createStore({ root }) {
     async load(id) {
       const text = await readFile(projectFile(id), 'utf8');
       const project = JSON.parse(text);
+      if (isRunning(id)) return project;
       // 重启后不认「进行中」：交给用户或下一次运行重新推。
       for (const stage of STAGE_IDS) {
         const record = project.stages?.[stage];
-        if (record?.status === 'running') {
+        if (['running', 'rework'].includes(record?.status)) {
           record.status = 'failed';
           record.error = '进程重启，这次运行中断了';
         }
@@ -145,10 +149,23 @@ export function createStore({ root }) {
       return project;
     },
 
-    async save(project) {
-      await mkdir(dirOf(project.id), { recursive: true });
-      await writeJson(projectFile(project.id), project);
-      return project;
+    async save(project, { pipeline = false } = {}) {
+      return withLock(project.id, async () => {
+        if (pipeline) {
+          const latest = await this.load(project.id);
+          project.reference = latest.reference;
+          project.brief = latest.brief;
+          project.title = latest.title;
+          project.targetSeconds = latest.targetSeconds;
+          project.updatedAt = Math.max(project.updatedAt, latest.updatedAt);
+          const events = [...latest.events, ...project.events];
+          project.events = [...new Map(events.map((entry) => [JSON.stringify(entry), entry])).values()]
+            .sort((a, b) => a.at - b.at).slice(-400);
+        }
+        await mkdir(dirOf(project.id), { recursive: true });
+        await writeJson(projectFile(project.id), project);
+        return project;
+      });
     },
 
     /** 读-改-写整个项目，同一项目串行。 */
@@ -183,7 +200,7 @@ export function createStore({ root }) {
             doneStages: done,
             totalStages: STAGES.length,
             pendingReview: project.pendingReview ?? null,
-            running: project.running ?? null,
+            running: isRunning(project.id) ? project.running ?? null : null,
             finalFile: project.finalFile ?? null,
           });
         } catch {

@@ -44,7 +44,8 @@ const briefBlock = (project) => {
   const brief = project?.brief ?? {};
   const lines = [
     `项目：${project?.title ?? ''}（${project?.platform ?? 'douyin'} / 目标 ${project?.targetSeconds ?? 45} 秒 / 画幅 ${project?.aspect ?? '9:16'}）`,
-    `产品名：${brief.productName || '（未填）'}`,
+    `${brief.projectMode === 'story' ? '作品名' : '产品名'}：${brief.productName || '（未填）'}`,
+    brief.projectMode === 'story' ? '项目类型：剧情短片，围绕角色目标和动作冲突构思，成片不要求有销售对象。' : '',
     `品类：${brief.category || '（未填）'}`,
     `目标人群：${brief.audience || '（未填）'}`,
     `核心卖点：${(brief.sellingPoints ?? []).filter(Boolean).join('；') || '（未填）'}`,
@@ -230,10 +231,11 @@ const STAGE_TASKS = {
     '- 第一拍就要把前提立住：允许用一句画外台词交代（例如「我妈收拾完，我的拖鞋就不见了」），不要只靠画面猜。',
   ].join('\n'),
 
-  storyboard: () => [
+  storyboard: (project) => [
     '目标：把故事写成一份能直接下单生成的分镜，必须一次通过 13 道门。',
     '',
     STORYBOARD_RULES,
+    `本片 targetSeconds 必须为 ${project?.targetSeconds ?? 45}，先分配每段和每镜的秒数，再逐镜填写。`,
     '',
     '## 可拍性红线（审核 Agent 会逐条挑这些毛病）',
   '- 一镜一个动作。走位、转身、横穿房间都要单独成镜；3 秒里不要出现「走过去 + 放下 + 转身」这种连招。',
@@ -406,6 +408,9 @@ export function createAgents({ callModel, config = {} }) {
         priorBlock(context),
         '',
         task(project),
+        project?.brief?.audioMode === 'no-dialogue'
+          ? '本片为无对白模式：用动作和环境声交代前提、转折和结尾。punchline 是结尾动作，原文纳入 ending。所有分镜节拍使用 action，提示词只写非语言音效，配音清单 lines 与 characters 留空。'
+          : '',
         '',
         // 硬性要求放在规则后面、打回原因前面：它不是「上一版哪里错了」，是这一版必须照做的规格。
         directive ? `## 本轮硬性要求（覆盖上面的默认写法，逐条照做）\n${directive}` : '',
@@ -421,7 +426,7 @@ export function createAgents({ callModel, config = {} }) {
       });
       if (stage === 'storyboard') {
         // 模型偶尔把 targetSeconds 写成字符串：统一成数字，免得门禁误判。
-        artifact.targetSeconds = Number(artifact.targetSeconds) || Number(project?.targetSeconds) || 45;
+        artifact.targetSeconds = Number(project?.targetSeconds) || Number(artifact.targetSeconds) || 45;
         if (!Array.isArray(artifact.params)) artifact.params = { ...(artifact.params ?? {}), maxSegmentSeconds: MAX_SEGMENT_SECONDS };
       }
       return artifact;
@@ -613,21 +618,27 @@ export function createAgents({ callModel, config = {} }) {
 
     /** 画面验收：抽帧交给能看图的模型，查主体变形、道具错乱、文字乱码、产品不可识别。 */
     async reviewFrames({ project, frames, signal }) {
+      const storyMode = project?.brief?.projectMode === 'story';
       const user = [
-        `项目：${project?.title ?? ''}｜产品：${project?.brief?.productName ?? ''}｜目标 ${project?.targetSeconds ?? '?'} 秒`,
-        '这几张是成片的抽帧（按时间顺序）。请判断这条片子能不能交付：',
-        '1. 主体是否清晰可辨；2. 有没有物体变形、融合、多余手指、穿帮；3. 文字/Logo 是否乱码；4. 产品是否可识别（能不能看出是卖什么）；5. 相邻镜头的光线、场景、人物是否连贯。',
+        `项目：${project?.title ?? ''}｜目标 ${project?.targetSeconds ?? '?'} 秒`,
+        storyMode
+          ? '类型是剧情短片。检查人物表演、关键动作、道具辨识度和镜头间连续性。道具特写可以省略主角或其他道具。'
+          : `类型是推广视频。检查重要镜头里的产品辨识度：${project?.brief?.productName ?? ''}。`,
+        project?.brief?.extra ? `项目简报：${project.brief.extra}` : '',
+        '抽帧按时间排列。逐张检查是否存在能看清的形体异常、道具粘连、穿模、乱码和显著连贯性问题。',
+        '正常遮挡、画面景深和卡通动物爪子的造型不判为穿模。只有图中可见且妨碍理解或交付的缺陷才判为 blocker。看不清或需要连续播放确认的情况写明不确定性。',
+        'where 写抽帧序号，例如「第2张」。action 取 segment（单段源画面内的变形、穿模、道具错误），edit（剪辑、转场、节奏和跨段接缝），或 inspect（仅凭抽帧无法确认的情况）。',
         '只输出 JSON：',
         '{',
         '  "pass": true,',
         '  "score": 0,',
-        '  "issues": [{ "where": "第几张/哪一镜", "severity": "blocker|major|minor", "problem": "看到了什么", "fix": "怎么改（改提示词就写清改成什么）" }],',
+        '  "issues": [{ "where": "第几张/哪一镜", "severity": "blocker|major|minor", "action": "segment|edit|inspect", "problem": "看到了什么", "fix": "怎么改（改提示词就写清改成什么）" }],',
         '  "summary": "一句话"',
         '}',
         '看不出问题就写 pass:true、issues 空数组，不要为了严格而编造。',
       ].join('\n');
       const raw = await callModel({
-        system: '你是画面验收员：只看画面，不猜剧情。物体变形、道具错乱、手指异常、文字乱码、产品认不出，都是要拦的硬伤。只输出 JSON。',
+        system: '你是视频画面验收员。按项目类型和可见证据审查画面，明确指出时间顺序和具体位置。只输出 JSON。',
         user,
         temperature: 0.2,
         maxTokens: 1600,
@@ -654,6 +665,9 @@ export function createAgents({ callModel, config = {} }) {
         `审核对象：${STAGE_LABEL[stage] ?? stage}（第 ${attempt} 版）`,
         '本次审核范围：只看下面这一份产物。它不含别的阶段的内容是正常的——缺分镜、缺台词、缺时长都不算问题，不要因此扣分。',
         `本阶段审核重点：${focus}`,
+        project?.brief?.audioMode === 'no-dialogue'
+          ? '本项目没有对白。检查前提和落点是否通过画面动作清楚交代，声音设计以环境声和动作音效为主。'
+          : '',
         `项目：${project?.title ?? ''}｜目标 ${project?.targetSeconds ?? 45} 秒｜平台 ${project?.platform ?? 'douyin'}`,
         referenceMode
           ? '本项目是**复刻模式**：创意依据是参考片的拆解报告，不是热点清单。hotspotLinks 为空不算问题；但每条方向必须有 borrowedFrom（借了参考片哪段结构）和 swapped（换掉了什么），缺这两个才是问题。'
@@ -700,15 +714,25 @@ export function createAgents({ callModel, config = {} }) {
       const score = Number.isFinite(total) ? Math.max(0, Math.min(100, Math.round(total))) : 0;
       const issues = Array.isArray(verdict.issues) ? verdict.issues : [];
       const blocker = issues.some((issue) => String(issue?.severity) === 'blocker');
-      const pass = verdict.verdict === 'pass' && score >= threshold && !blocker;
+      // 两种判定：
+      //  strict  —— 必须 reviewer 说 pass 且到阈值；
+      //  balanced —— 门禁已经过了，只要没有 blocker、分数在「阈值-12」以上，就带建议收下，
+      //              避免为一镜多事这种工艺问题反复烧钱重跑。
+      const policy = String(config.reviewPolicy ?? 'balanced').toLowerCase();
+      const floor = Math.max(0, threshold - 12);
+      const strictPass = verdict.verdict === 'pass' && score >= threshold && !blocker;
+      const pass = policy === 'strict' ? strictPass : !blocker && score >= floor;
       return {
         score,
         dimensions,
         pass,
+        acceptedWithNotes: pass && !strictPass,
         verdict: pass ? 'pass' : 'rework',
         issues: issues.slice(0, 20),
         summary: String(verdict.summary ?? ''),
         threshold,
+        policy,
+        floor,
       };
     },
   };

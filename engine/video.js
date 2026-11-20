@@ -264,7 +264,10 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
     if (!easyframe.key) throw providerError('auth', '没有配置 EasyFrame API Key（easyframeApiKey）');
     const optimize = mode === 't2va' || mode === 'ref2va' ? Boolean(config.promptOptimization ?? true) : false;
     const firstLine = alignLine(mode, seconds);
-    const promptText = firstLine ? `${firstLine}\n\n${prompt}` : prompt;
+    const binding = images.every((image) => image.subject) && images.length
+      ? images.map((image, index) => `参考图 ${index + 1} 对应角色「${image.subject}」`).join('，')
+      : '';
+    const promptText = [firstLine, binding, prompt].filter(Boolean).join('\n\n');
     // JSON 通道要真正的布尔与数字；multipart 通道只能塞字符串（上游按字符串解析）。
     const jsonFields = {
       model: String(model || config.videoModel || 'minimax-h3-mini'),
@@ -404,7 +407,7 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
         try {
           const result = await PROVIDERS[candidate.name].submit({ prompt, mode, seconds, resolution, aspect, model, images });
           log(`[video] ${candidate.name} 受理 ${result.taskId}（${mode}/${seconds}s/${resolution}/${aspect}）`);
-          return { ...result, label: candidate.label };
+          return { ...result, label: candidate.label, referenceCount: candidate.name === 'easyframe' ? images.length : 0 };
         } catch (error) {
           failures.push(`${candidate.label}：${error.message}`);
           log(`[video] ${candidate.name} 提交失败：${error.message}`);

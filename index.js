@@ -15,6 +15,7 @@ import { mkdir, copyFile, readdir, readFile, stat, writeFile } from 'node:fs/pro
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 import { createStore, newProject, event, STAGES, STAGE_IDS, STAGE_BY_ID, STAGE_STATUS } from './engine/store.js';
 import {
@@ -24,6 +25,7 @@ import {
   describeFailures,
   applyLocks,
   loadShotContract,
+  patchStoryboard,
   segmentsOf,
   gateRender,
 } from './engine/contracts.js';
@@ -45,6 +47,8 @@ const DEFAULTS = {
   llmTimeoutMs: 300_000,
   llmMaxTokens: 8000,
   reviewThreshold: 80,
+  /** strict：审核必须说 pass 且到阈值；balanced：门禁过、无 blocker、分数 ≥ 阈值-12 就带建议收下。 */
+  reviewPolicy: 'balanced',
   maxRework: 2,
   aspectRatio: '9:16',
   resolution: '720p',
@@ -236,7 +240,9 @@ export function apply(ctx, config = {}) {
 
   const projectRoot = options.projectDir || join(dataRoot, 'projects');
   const inboxFile = join(dataRoot, 'inbox.json');
-  const store = createStore({ root: projectRoot });
+  /** 正在跑的项目：id -> { stage, startedAt, stageStartedAt } */
+  const jobs = new Map();
+  const store = createStore({ root: projectRoot, isRunning: (id) => jobs.has(id) });
   const media = createMedia({ ffmpegPath: options.ffmpegPath, log });
   const openfilm = createOpenFilmFinisher({ config: options, log, media });
   const video = createVideoEngine({ config: options, log });
@@ -250,9 +256,6 @@ export function apply(ctx, config = {}) {
   });
   /** 独立出片任务的索引（h3_* 工具与「拉片台 / 出片」共用）。 */
   const videoTasks = createVideoTaskStore({ file: join(dataRoot, 'video-tasks.json'), log });
-
-  /** 正在跑的项目：id -> { stage, startedAt, stageStartedAt } */
-  const jobs = new Map();
 
   let shotContractPromise;
   const getShotContract = () => (shotContractPromise ??= loadShotContract(options.skillDir).catch((error) => {
@@ -342,7 +345,7 @@ export function apply(ctx, config = {}) {
 
   async function contextOf(project, stage) {
     const context = { project };
-    if (stage === 'idea' || stage === 'story') {
+    if (stage === 'idea' || stage === 'story' || stage === 'storyboard') {
       if (project.reference?.report) {
         context.reference = { report: project.reference.report, summary: project.reference.summary ?? null };
       }
@@ -438,7 +441,7 @@ export function apply(ctx, config = {}) {
   // -------------------------------------------------------------------------
   // 参考爆款：拉片 → 拆解报告（作为创意阶段的证据）
   // -------------------------------------------------------------------------
-  async function runReferenceJob(project, { url, localPath }) {
+  async function runReferenceJob(project, { url, localPath, advanced = true }) {
     const dir = join(store.dirOf(project.id), 'reference');
     await mkdir(dir, { recursive: true });
     const patch = async (value) => {
@@ -475,7 +478,7 @@ export function apply(ctx, config = {}) {
       // 可选的高级拆解：逐镜判定实拍/AI/代码，并给出复刻路线。失败不致命。
       let rea = null;
       let reaError = null;
-      if (options.reaVideoCmd) {
+      if (advanced && options.reaVideoCmd) {
         try {
           rea = await reference.rea({ video, dir, cmd: options.reaVideoCmd, onStage: stage });
           // 工具只能测帧率、噪声，画面语义还得有人看：让能看图的模型逐镜复核，再把答案并回结论。
@@ -676,7 +679,7 @@ export function apply(ctx, config = {}) {
     record.attempts = 0;
     record.startedAt = Date.now();
     event(project, { kind: 'stage-start', stage, text: `${STAGE_BY_ID[stage].label}开始（生产 Agent）` });
-    await store.save(project);
+    await store.save(project, { pipeline: true });
 
     const context = await contextOf(project, stage);
     // note 是用户或 Agent 对本轮的硬性要求，不是「上一版的错」，单独一路传，跨 attempt 都保留。
@@ -702,7 +705,14 @@ export function apply(ctx, config = {}) {
         const review = await agents.review({ stage, project, artifact, gate, attempt, signal });
         last = { artifact, gate, review, file };
         record.gate = { ok: gate.ok, failures: (gate.failures ?? []).slice(0, 12), at: Date.now() };
-        record.review = { score: review.score, pass: review.pass, dimensions: review.dimensions, summary: review.summary, at: Date.now() };
+        record.review = {
+          score: review.score,
+          pass: review.pass,
+          dimensions: review.dimensions,
+          summary: review.summary,
+          accepted: review.acceptedWithNotes ? 'with-notes' : 'clean',
+          at: Date.now(),
+        };
         record.file = file ? basename(file) : null;
         record.updatedAt = Date.now();
         await store.saveReview(project, stage, attempt, { stage, attempt, artifact, gate, review }).catch(() => {});
@@ -710,14 +720,15 @@ export function apply(ctx, config = {}) {
         if (gate.ok && review.pass) {
           record.status = 'done';
           record.error = null;
-          record.issues = [];
+          const notes = (review.issues ?? []).slice(0, 6).map((issue) => `[${issue.severity ?? 'major'}] ${issue.where ?? ''}：${issue.problem ?? ''}`);
+          record.issues = review.acceptedWithNotes ? notes : [];
           record.note = null;
           event(project, {
             kind: 'stage-done',
             stage,
-            text: `${STAGE_BY_ID[stage].label}通过（第 ${attempt} 版，审核 ${review.score} 分）`,
+            text: `${STAGE_BY_ID[stage].label}通过（第 ${attempt} 版，审核 ${review.score} 分${review.acceptedWithNotes ? `，${notes.length} 条建议` : ''}）`,
           });
-          await store.save(project);
+          await store.save(project, { pipeline: true });
           if (stage === 'characters') await ensurePortraits(project, artifact);
           return { ok: true, stage, attempts: attempt, score: review.score };
         }
@@ -732,12 +743,12 @@ export function apply(ctx, config = {}) {
           stage,
           text: `第 ${attempt} 版没过（门禁 ${gate.ok ? '通过' : '失败'} / 审核 ${review.score} 分），打回重做`,
         });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
       } catch (error) {
         record.error = error.message;
         record.status = 'failed';
         event(project, { kind: 'stage-error', stage, text: `${STAGE_BY_ID[stage].label}失败：${error.message}` });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
         return { ok: false, stage, error: error.message };
       }
       if (signal?.aborted) break;
@@ -745,7 +756,7 @@ export function apply(ctx, config = {}) {
 
     record.status = 'needs_review';
     record.issues = issues;
-    await store.save(project);
+    await store.save(project, { pipeline: true });
     const pending = await notifyReview(project, stage, {
       score: last?.review?.score ?? null,
       issues: last?.review?.issues ?? [],
@@ -776,7 +787,7 @@ export function apply(ctx, config = {}) {
         changed = true;
         event(project, { kind: 'portrait-error', stage: 'characters', text: `定妆图失败（${character.name}）：${error.message}` });
       }
-      await store.save(project);
+      await store.save(project, { pipeline: true });
     }
     if (changed) await store.writeArtifact(project, 'characters', artifact);
   }
@@ -784,7 +795,7 @@ export function apply(ctx, config = {}) {
   // -------------------------------------------------------------------------
   // 出片阶段：每段一个任务，提交后统一轮询
   // -------------------------------------------------------------------------
-  async function runRenderStage(project, { signal } = {}) {
+  async function runRenderStage(project, { signal, forceSegmentId, compareOnly, note } = {}) {
     const storyboard = await artifactOf(project, 'storyboard');
     if (!storyboard) throw new Error('还没有分镜，不能出片');
     const characters = (await artifactOf(project, 'characters')) ?? { characters: [] };
@@ -794,17 +805,47 @@ export function apply(ctx, config = {}) {
     const record = project.stages.render;
     record.status = 'running';
     record.error = null;
+    if (forceSegmentId) {
+      if (!compareOnly || project.pendingReview?.stage !== 'edit') project.pendingReview = null;
+      event(project, { kind: 'render-retake', stage: 'render', text: `只重新生成段 ${forceSegmentId}，其余段素材保留` });
+    }
     event(project, { kind: 'stage-start', stage: 'render', text: '分段出片开始' });
-    await store.save(project);
+    await store.save(project, { pipeline: true });
 
     const segments = segmentsOf(storyboard);
     const previous = new Map(((record.artifact?.tasks ?? [])).map((task) => [task.segmentId, task]));
     const tasks = [];
-    record.artifact = { tasks, startedAt: Date.now() };
+    const priorTake = compareOnly ? previous.get(forceSegmentId) : null;
+    if (project.finalFile && !project.stages.edit.timeline) {
+      project.stages.edit.timeline = reviewTimeline(await artifactOf(project, 'edit'), record.artifact);
+    }
+    const takes = record.artifact?.takes ?? {};
+    for (const task of previous.values()) rememberTake(takes, task);
+    record.artifact = { tasks, takes, startedAt: Date.now() };
 
     // 1) 提交（已完成的段直接复用，不重复花钱）
     for (const segment of segments) {
-      const old = previous.get(segment.id);
+      const images = await referenceImages(segment, characters);
+      const input = {
+        prompt: forceSegmentId === segment.id && note
+          ? [segment.prompt, `本段返工要求：${note}`].join('\n\n')
+          : segment.prompt,
+        mode: images.length > 0 ? 'ref2va' : 't2va',
+        seconds: segment.duration,
+        resolution: String(project.resolution || options.resolution),
+        aspect: String(project.aspect || options.aspectRatio),
+        model: options.videoModel,
+      };
+      const hash = createHash('sha256').update(JSON.stringify(input));
+      for (const image of images) hash.update(JSON.stringify(image.subject)).update(createHash('sha256').update(image.buffer).digest());
+      const inputHash = hash.digest('hex');
+      const savedTask = previous.get(segment.id);
+      const matchingInput = savedTask?.inputHash
+        ? savedTask.inputHash === inputHash
+        : savedTask?.prompt === input.prompt && savedTask?.seconds === input.seconds;
+      const keepOtherSegment = forceSegmentId && forceSegmentId !== segment.id
+        && savedTask?.status === 'completed' && existsSync(savedTask.file ?? '');
+      const old = forceSegmentId !== segment.id && (matchingInput || keepOtherSegment) ? savedTask : null;
       if (old?.status === 'completed' && old.file && existsSync(old.file)) {
         // 改了 trimSubtitleBand：原来裁过、现在不裁，就退回原片，不必重新花钱生成。
         if (!options.trimSubtitleBand && old.rawFile && existsSync(old.rawFile) && old.file !== old.rawFile) {
@@ -814,25 +855,18 @@ export function apply(ctx, config = {}) {
         tasks.push(old);
         continue;
       }
-      const task = old?.taskId
+      const task = old?.taskId && !['failed', 'cancelled'].includes(old.status)
         ? old
-        : { segmentId: segment.id, seconds: segment.duration, prompt: segment.prompt, status: 'queued', progress: 0, error: null, file: null, createdAt: Date.now() };
+        : { segmentId: segment.id, seconds: segment.duration, prompt: input.prompt, inputHash, status: 'queued', progress: 0, error: null, file: null, createdAt: Date.now() };
       tasks.push(task);
       if (!task.taskId) {
         try {
-          const images = await referenceImages(segment, characters);
-          const submitted = await video.submit({
-            prompt: segment.prompt,
-            mode: images.length > 0 ? 'ref2va' : 't2va',
-            seconds: segment.duration,
-            resolution: String(options.resolution),
-            aspect: String(project.aspect || options.aspectRatio),
-            model: options.videoModel,
-            images,
-          });
+          const submitted = await video.submit({ ...input, images });
           task.taskId = submitted.taskId;
           task.provider = submitted.provider;
           task.providerLabel = submitted.label;
+          task.referenceCount = submitted.referenceCount;
+          task.referenceNames = submitted.referenceCount ? images.map((image) => image.subject) : [];
           task.status = 'queued';
           task.submittedAt = Date.now();
           event(project, { kind: 'render-submit', stage: 'render', text: `段 ${segment.id} 已提交（${submitted.label} · ${segment.duration}s）` });
@@ -841,7 +875,7 @@ export function apply(ctx, config = {}) {
           task.error = error.message;
           event(project, { kind: 'render-error', stage: 'render', text: `段${segment.id} 提交失败：${error.message}` });
         }
-        await store.save(project);
+        await store.save(project, { pipeline: true });
       } else {
         task.status = 'queued';
       }
@@ -857,7 +891,7 @@ export function apply(ctx, config = {}) {
       for (const task of pending) {
         try {
           const state = await video.status({ taskId: task.taskId, provider: task.provider });
-          task.status = state.status;
+          task.status = state.status === 'completed' ? 'processing' : state.status;
           task.progress = state.progress ?? task.progress ?? 0;
           if (state.error) task.error = state.error;
           progressed = true;
@@ -868,8 +902,10 @@ export function apply(ctx, config = {}) {
               dir: segmentDir,
               filename: `${task.segmentId}-${task.taskId}.mp4`,
             });
+            task.status = 'completed';
             task.rawFile = saved.file;
             task.file = saved.file;
+            if (!priorTake?.file && (project.finalFile || project.stages.edit?.finalFile)) project.stages.edit.stale = true;
             if (options.trimSubtitleBand) {
               const trimmed = saved.file.replace(/\.mp4$/i, '') + '.trimmed.mp4';
               try {
@@ -884,6 +920,7 @@ export function apply(ctx, config = {}) {
             if (info?.duration) task.duration = Math.round(info.duration * 10) / 10;
             // 落盘成功就把之前轮询超时留下的错误清掉，别让任务卡显示假错误。
             if (task.file && existsSync(task.file)) task.error = null;
+            rememberTake(takes, task);
             event(project, { kind: 'render-done', stage: 'render', text: `段${task.segmentId} 完成${task.duration ? `（${task.duration}s）` : ''}` });
           } else if (state.status === 'failed') {
             event(project, { kind: 'render-error', stage: 'render', text: `段 ${task.segmentId} 失败：${state.error ?? '未知原因'}` });
@@ -892,7 +929,7 @@ export function apply(ctx, config = {}) {
           task.error = error.message;
         }
       }
-      await store.save(project);
+      await store.save(project, { pipeline: true });
       // 一次轮询全部超时不算「跑完了」：上游偶尔抽风，连续 5 轮都拿不到状态才放弃。
       if (!progressed) {
         consecutiveFailures += 1;
@@ -908,13 +945,18 @@ export function apply(ctx, config = {}) {
     record.gate = { ok: gate.ok, failures: (gate.failures ?? []).slice(0, 12), at: Date.now() };
     record.completedAt = Date.now();
     if (gate.ok) {
+      if (priorTake?.status === 'completed' && priorTake.file && existsSync(priorTake.file)) {
+        const index = tasks.findIndex((task) => task.segmentId === forceSegmentId);
+        tasks[index] = priorTake;
+        event(project, { kind: 'render-alternate', stage: 'render', text: `段 ${forceSegmentId} 的候选素材已就绪，可在审片台对比后采用` });
+      }
       record.status = 'done';
       event(project, { kind: 'stage-done', stage: 'render', text: `出片完成，${tasks.length} 段` });
-      await store.save(project);
+      await store.save(project, { pipeline: true });
       return { ok: true, stage: 'render', tasks: tasks.length };
     }
     record.status = 'needs_review';
-    await store.save(project);
+    await store.save(project, { pipeline: true });
     const pending = await notifyReview(project, 'render', {
       gateFailures: gate.failures,
       reason: '有段没出成功，需要人工决定重试还是改分镜',
@@ -922,14 +964,19 @@ export function apply(ctx, config = {}) {
     return { ok: false, stage: 'render', needsReview: true, pendingReview: pending };
   }
 
-  /** 单人物段：拿定妆图当参考图，保证同一个人在不同段里长得一样。 */
+  /** 以分镜的出场顺序绑定本段角色定妆图。 */
   async function referenceImages(segment, characters) {
-    if (segment.people.length !== 1) return [];
-    const profile = (characters?.characters ?? []).find((character) => character.name === segment.people[0]);
-    const file = profile?.portrait?.file;
-    if (!file || !existsSync(file)) return [];
-    const buffer = await readFile(file);
-    return [{ name: 'portrait.png', mime: file.toLowerCase().endsWith('.jpg') ? 'image/jpeg' : 'image/png', buffer }];
+    const portraits = new Map((characters?.characters ?? []).map(({ name, portrait }) => [name, portrait?.file]));
+    const images = await Promise.all(segment.people.map(async (subject, index) => {
+      const file = portraits.get(subject);
+      if (!file) return null;
+      const buffer = await readFile(file).catch(() => null);
+      if (!buffer) return null;
+      const mime = mimeOf(file);
+      const extension = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+      return { subject, name: `portrait-${index + 1}.${extension}`, mime, buffer };
+    }));
+    return images.filter(Boolean);
   }
 
   // -------------------------------------------------------------------------
@@ -940,7 +987,7 @@ export function apply(ctx, config = {}) {
     record.status = 'running';
     record.error = null;
     event(project, { kind: 'stage-start', stage: 'edit', text: '成片剪辑开始（剪辑团队 Agent）' });
-    await store.save(project);
+    await store.save(project, { pipeline: true });
 
     const storyboard = await artifactOf(project, 'storyboard');
     const characters = await artifactOf(project, 'characters');
@@ -962,7 +1009,7 @@ export function apply(ctx, config = {}) {
         record.error = error.message;
         record.status = 'failed';
         event(project, { kind: 'stage-error', stage: 'edit', text: `剪辑方案生成失败：${error.message}` });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
         return { ok: false, stage: 'edit', error: error.message };
       }
       const gate = await runGate('edit', edl, { render, project });
@@ -974,7 +1021,7 @@ export function apply(ctx, config = {}) {
         record.status = 'rework';
         record.issues = issues;
         event(project, { kind: 'stage-rework', stage: 'edit', text: `剪辑清单第${attempt} 版没过：${issues[0] ?? ''}` });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
         continue;
       }
 
@@ -985,15 +1032,22 @@ export function apply(ctx, config = {}) {
         record.finalFile = output.finalFile;
         record.coverFile = output.coverFile;
         record.duration = output.duration;
+        record.timeline = reviewTimeline(edl, render, output.timeline);
+        record.stale = false;
+        record.note = null;
+        record.visual = null;
+        record.review = null;
+        record.openfilm = null;
+        record.outputAt = Date.now();
         // 成片一剪出来就挂到项目上：审核可能不过，但片子本身要给人在面板里看得见。
         project.finalFile = output.finalFile;
         project.coverFile = output.coverFile;
-        await store.save(project);
+        await store.save(project, { pipeline: true });
       } catch (error) {
         record.error = `剪辑执行失败：${error.message}`;
         record.status = 'failed';
         event(project, { kind: 'stage-error', stage: 'edit', text: record.error });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
         return { ok: false, stage: 'edit', error: record.error };
       }
 
@@ -1015,7 +1069,7 @@ export function apply(ctx, config = {}) {
           stage: 'edit',
           text: visual.pass ? '画面验收通过' : `画面验收拦下：${visual.summary || (visual.issues[0]?.problem ?? '')}`,
         });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
       } catch (error) {
         visual = { pass: true, issues: [], summary: '', error: error.message };
         record.visual = visual;
@@ -1036,9 +1090,10 @@ export function apply(ctx, config = {}) {
               ? `逐帧体检通过${openfilmQa.warnings?.length ? `（${openfilmQa.warnings.length} 个提醒）` : ''}`
               : `逐帧体检拦下：${openfilmQa.errors?.[0] ?? openfilmQa.warnings?.[0] ?? ''}`,
           });
-          await store.save(project);
+          await store.save(project, { pipeline: true });
         } catch (error) {
           openfilmQa = { ok: true, errors: [], warnings: [], error: error.message };
+          record.openfilm = { error: error.message };
           log(`[edit] 逐帧体检失败（不阻塞）：${error.message}`);
         }
       }
@@ -1068,7 +1123,14 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         review = { score: 0, pass: false, issues: [{ severity: 'major', where: '终审', problem: error.message, fix: '重试终审或人工复核' }], summary: '终审失败' };
       }
-      record.review = { score: review.score, pass: review.pass, dimensions: review.dimensions, summary: review.summary, at: Date.now() };
+      record.review = {
+        score: review.score,
+        pass: review.pass,
+        dimensions: review.dimensions,
+        summary: review.summary,
+        accepted: review.acceptedWithNotes ? 'with-notes' : 'clean',
+        at: Date.now(),
+      };
       // 画面验收有 blocker 就是不过：文本审核看不出的硬伤，以看图的结论为准。
       if (visual && visual.pass === false) {
         review.pass = false;
@@ -1094,7 +1156,7 @@ export function apply(ctx, config = {}) {
         // 发布包只是附加产物：写失败不应该把整条成片判成失败。
         await writePublishPack(project, edl, output).catch((error) => log(`发布包写入失败：${error.message}`));
         event(project, { kind: 'stage-done', stage: 'edit', text: `成片完成（审核 ${review.score} 分，${output.duration}s）` });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
         return { ok: true, stage: 'edit', score: review.score, finalFile: output.finalFile };
       }
 
@@ -1102,16 +1164,18 @@ export function apply(ctx, config = {}) {
       record.status = 'rework';
       record.issues = issues;
       event(project, { kind: 'stage-rework', stage: 'edit', text: `终审 ${review.score} 分没过，打回重剪` });
-      await store.save(project);
+      await store.save(project, { pipeline: true });
+      if (visual?.pass === false && visual.issues?.some((issue) => issue.action === 'segment' && ['blocker', 'major'].includes(issue.severity))) break;
     }
 
     record.status = 'needs_review';
-    await store.save(project);
+    await store.save(project, { pipeline: true });
     const pending = await notifyReview(project, 'edit', {
       score: last?.review?.score ?? null,
       issues: last?.review?.issues ?? [],
       gateFailures: last?.gate?.failures ?? [],
-      reason: `自动重剪 ${record.attempts} 次仍未过终审`,
+      reason: record.visual?.issues?.some((issue) => issue.action === 'segment' && ['blocker', 'major'].includes(issue.severity))
+        ? '源画面需返工，请在审片台定位分段' : `自动重剪 ${record.attempts} 次仍未过终审`,
     });
     return { ok: false, stage: 'edit', needsReview: true, pendingReview: pending };
   }
@@ -1307,7 +1371,7 @@ export function apply(ctx, config = {}) {
 
   // -------------------------------------------------------------------------
   // 流水线调度  // -------------------------------------------------------------------------
-  async function runPipeline(id, { from, note, signal, internal = false, only = false } = {}) {
+  async function runPipeline(id, { from, note, signal, internal = false, only = false, forceSegmentId, compareOnly = false, stopBeforeRender = false } = {}) {
     if (!internal && jobs.has(id)) return { ok: false, error: '这个项目正在跑，等它跑完' };
     const job = { id, stage: from ?? 'idea', startedAt: Date.now() };
     jobs.set(id, job);
@@ -1320,6 +1384,10 @@ export function apply(ctx, config = {}) {
 
       for (const stage of planned) {
         if (signal?.aborted) break;
+        if (stage === 'render' && stopBeforeRender) {
+          await store.update(id, (fresh) => event(fresh, { kind: 'render-ready', stage, text: '分段清单已就绪，请确认后开始出片' }));
+          break;
+        }
         project = await store.load(id);
         if (stage !== 'render' && stage !== 'edit' && project.stages[stage]?.status === 'done' && !note) {
           results.push({ stage, skipped: true });
@@ -1328,11 +1396,11 @@ export function apply(ctx, config = {}) {
         job.stage = stage;
         project.running = { stage, startedAt: job.startedAt, stageStartedAt: Date.now() };
         event(project, { kind: 'run', stage, text: `跑${STAGE_BY_ID[stage].label}` });
-        await store.save(project);
+        await store.save(project, { pipeline: true });
 
         let result;
         if (PRODUCE_STAGES.includes(stage)) result = await runProduceStage(project, stage, { note, signal });
-        else if (stage === 'render') result = await runRenderStage(project, { signal });
+        else if (stage === 'render') result = await runRenderStage(project, { signal, forceSegmentId, compareOnly, note });
         else result = await runEditStage(project, { note, signal });
         results.push(result);
 
@@ -1340,7 +1408,7 @@ export function apply(ctx, config = {}) {
         // 每一阶段完成后重新读一次：审核/通知可能在别处改过状态。
         project = await store.load(id);
         project.running = null;
-        await store.save(project);
+        await store.save(project, { pipeline: true });
       }
       return { ok: results.every((result) => result.ok || result.skipped), results, running: false };
     } catch (error) {
@@ -1360,6 +1428,7 @@ export function apply(ctx, config = {}) {
 
   /** 后台跑，路由/工具立刻返回，面板靠 /state 轮询进度。 */
   function startPipeline(id, optionsForRun) {
+    if (jobs.has(id)) return null;
     const controller = new AbortController();
     jobs.set(id, { id, stage: optionsForRun?.from ?? 'idea', startedAt: Date.now(), controller });
     const promise = runPipeline(id, { ...optionsForRun, signal: controller.signal, internal: true }).finally(() => {
@@ -1373,11 +1442,59 @@ export function apply(ctx, config = {}) {
   // -------------------------------------------------------------------------
   // 面板 API
   // -------------------------------------------------------------------------
+  function rememberTake(takes, task) {
+    if (!task?.file || task.status !== 'completed') return;
+    takes[basename(task.file)] = {
+      taskId: task.taskId ?? null,
+      inputHash: task.inputHash ?? null,
+      prompt: task.prompt ?? null,
+      seconds: task.seconds ?? null,
+      provider: task.provider ?? null,
+      providerLabel: task.providerLabel ?? null,
+      referenceCount: task.referenceCount ?? null,
+      referenceNames: task.referenceNames ?? null,
+    };
+  }
+
+  async function segmentVersions(project, storyboard, render) {
+    const directory = join(store.dirOf(project.id), 'segments');
+    const files = (await readdir(directory, { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isFile());
+    const segments = segmentsOf(storyboard);
+    return Object.fromEntries(segments.map(({ id }) => {
+      const task = render?.tasks?.find((item) => item.segmentId === id);
+      const prefix = `${id}-`;
+      const names = files.map(({ name }) => name).filter((name) => name.startsWith(prefix)
+        && !segments.some((segment) => segment.id.length > id.length && name.startsWith(`${segment.id}-`))
+        && /^[\w-]+(?:\.trimmed)?\.mp4$/i.test(name.slice(prefix.length)));
+      const current = task?.file ? basename(task.file) : null;
+      return [id, names.filter((name) => name === current || !name.endsWith('.trimmed.mp4'))
+        .filter((name) => !current?.endsWith('.trimmed.mp4') || name !== current.replace('.trimmed.mp4', '.mp4'))
+        .sort((a, b) => Number(b === current) - Number(a === current) || a.localeCompare(b))
+        .map((name) => ({ id: name, current: name === current }))];
+    }));
+  }
+
+  function reviewTimeline(edl, render, actual = []) {
+    const tasks = new Map((render?.tasks ?? []).map((task) => [String(task.segmentId), task]));
+    let cursor = 0;
+    return (edl?.order ?? []).filter((entry) => tasks.has(String(entry.segmentId))).map((entry, index) => {
+      const task = tasks.get(String(entry.segmentId));
+      const sourceStart = Math.max(0, Number(entry.trimStart) || 0);
+      const total = Number(task.duration || task.seconds) || 0;
+      const sourceEnd = entry.trimEnd == null ? total : Math.min(total, Number(entry.trimEnd));
+      const start = actual[index]?.at ?? cursor;
+      const length = actual[index]?.length ?? Math.max(0, sourceEnd - sourceStart);
+      cursor = start + length;
+      return { segmentId: entry.segmentId, start, end: cursor, sourceStart, version: task.file ? basename(task.file) : null };
+    });
+  }
+
   const handlers = {
     async config() {
       return ok({
         projectDir: projectRoot,
         reviewThreshold: Number(options.reviewThreshold) || 80,
+        reviewPolicy: String(options.reviewPolicy ?? 'balanced'),
         maxRework: Number(options.maxRework) || 2,
         aspect: String(options.aspectRatio),
         aspects: ['9:16', '16:9', '1:1', '4:3', '3:4', '21:9'].filter((value) => video.providers().length > 0),
@@ -1536,7 +1653,16 @@ export function apply(ctx, config = {}) {
         if (artifact) artifacts[stage] = artifact;
       }
       const render = project.stages.render?.artifact ?? null;
+      const plan = segmentsOf(artifacts.storyboard).map((segment) => ({
+        id: segment.id, seconds: segment.seconds, generationSeconds: segment.duration, people: segment.people,
+        opening: segment.startShot?.action, ending: segment.shots.at(-1)?.lastFrame,
+        props: [...new Set(segment.shots.map((shot) => shot.others).filter(Boolean))],
+        references: segment.people.filter((name) => artifacts.characters?.characters?.some((character) => character.name === name && character.portrait?.file && existsSync(character.portrait.file))),
+      }));
       return ok({
+        plan,
+        versions: await segmentVersions(project, artifacts.storyboard, render),
+        timeline: project.stages.edit?.timeline ?? reviewTimeline(artifacts.edit, render),
         project: {
           id: project.id,
           title: project.title,
@@ -1549,7 +1675,10 @@ export function apply(ctx, config = {}) {
           chosenIdea: project.chosenIdea,
           pendingReview: project.pendingReview,
           running: project.running,
-          reference: project.reference ?? null,
+          reference: project.reference && !referenceJobs.has(id)
+            && ['running', 'analyzing', 'fetching', 'framing', 'asr', 'rea', 'reviewing'].includes(project.reference.status)
+            ? { ...project.reference, status: 'failed', error: '拉片已中断，请重新选择参考视频' }
+            : project.reference ?? null,
           finalFile: project.finalFile ?? project.stages.edit?.finalFile ?? null,
           coverFile: project.coverFile ?? project.stages.edit?.coverFile ?? null,
           events: (project.events ?? []).slice(-80),
@@ -1629,14 +1758,14 @@ export function apply(ctx, config = {}) {
       const { url, localPath } = normalizeSource(payload?.url, payload?.localPath);
       if (!url && !localPath) return fail('bad-request', '给一条抖音链接，或一个本机视频路径');
       const project = await store.load(id);
-      const ref = project.reference ?? {};
-      if (['running', 'analyzing', 'fetching', 'framing', 'asr', 'reviewing'].includes(ref.status)) return fail('busy', '这条已经有拉片任务在跑');
+      if (referenceJobs.has(id)) return fail('busy', '这条已经有拉片任务在跑');
       await store.update(id, (fresh) => {
         fresh.reference = { status: 'running', stage: '准备素材', url, localPath, at: Date.now() };
         event(fresh, { kind: 'reference', text: `开始拉片：${url || localPath}` });
       });
-      startReferenceJob(project, { url, localPath });
-      return ok({ started: true });    },
+      startReferenceJob(project, { url, localPath, advanced: payload?.advanced !== false });
+      return ok({ started: true });
+    },
 
     async referenceReport(payload) {
       const id = String(payload?.id ?? '');
@@ -1669,8 +1798,121 @@ export function apply(ctx, config = {}) {
       await store.update(id, (fresh) => {
         if (fresh.pendingReview) fresh.pendingReview = null;
       });
-      startPipeline(id, { from, note: String(payload?.note ?? '') || undefined, only: Boolean(payload?.only) });
+      const started = startPipeline(id, { from, note: String(payload?.note ?? '') || undefined, only: Boolean(payload?.only), stopBeforeRender: payload?.stopBeforeRender === true });
+      if (!started) return fail('busy', '这个项目正在跑');
       return ok({ started: true, project: project.id, from: from ?? 'idea', only: Boolean(payload?.only) });
+    },
+
+    async rerenderSegment(payload) {
+      const id = String(payload?.id ?? '');
+      const segmentId = String(payload?.segmentId ?? '');
+      const project = await store.load(id);
+      if (jobs.has(id)) return fail('busy', '这个项目正在跑');
+      const storyboard = await store.artifact(project, 'storyboard');
+      const segments = segmentsOf(storyboard);
+      const oldTasks = project.stages.render?.artifact?.tasks ?? [];
+      if (!segments.some((segment) => segment.id === segmentId)) return fail('not-found', '分镜里没有这个段落');
+      const missing = segments.find((segment) => segment.id !== segmentId && !oldTasks.some((task) =>
+        task.segmentId === segment.id && task.status === 'completed' && existsSync(task.file ?? ''),
+      ));
+      if (missing) return fail('not-ready', `段 ${missing.id} 没有可用素材，请先完成分段出片`);
+      const started = startPipeline(id, { from: 'render', forceSegmentId: segmentId, only: payload?.compare === true, compareOnly: payload?.compare === true, note: String(payload?.note ?? '').trim().slice(0, 2000) });
+      if (!started) return fail('busy', '这个项目正在跑');
+      return ok({ started: true, segmentId });
+    },
+
+    async chooseSegmentVersion(payload) {
+      const id = String(payload?.id ?? '');
+      const segmentId = String(payload?.segmentId ?? '');
+      const version = String(payload?.version ?? '');
+      if (!/^cs_[A-Za-z0-9_-]+$/.test(id)) return fail('bad-request', '项目编号无效');
+      const project = await store.load(id);
+      if (jobs.has(id)) return fail('busy', '这个项目正在跑');
+      const storyboard = await store.artifact(project, 'storyboard');
+      const versions = await segmentVersions(project, storyboard, project.stages.render?.artifact);
+      if (!Object.hasOwn(versions, segmentId) || !versions[segmentId].some((item) => item.id === version)) {
+        return fail('not-found', '没有找到这个分段版本');
+      }
+      const file = join(store.dirOf(id), 'segments', version);
+      const info = await media.probe(file);
+      const currentEdl = await store.artifact(project, 'edit');
+      return store.update(id, (fresh) => {
+        if (jobs.has(id)) return fail('busy', '这个项目正在跑');
+        const task = fresh.stages.render?.artifact?.tasks?.find((item) => item.segmentId === segmentId);
+        if (!task || !info.duration) return fail('not-ready', '这段素材不可用');
+        if (task.file !== file) {
+          if (fresh.finalFile && !fresh.stages.edit.timeline) fresh.stages.edit.timeline = reviewTimeline(currentEdl, fresh.stages.render.artifact);
+          const takes = fresh.stages.render.artifact.takes ??= {};
+          rememberTake(takes, task);
+          const metadata = Object.hasOwn(takes, version) ? takes[version] : {};
+          Object.assign(task, {
+            file, rawFile: file, status: 'completed', progress: 100, error: null, duration: info.duration,
+            taskId: null, inputHash: null, prompt: null, provider: null, providerLabel: null, referenceCount: null, referenceNames: null,
+            ...metadata,
+          });
+          const complete = segmentsOf(storyboard).every(({ id: segment }) => fresh.stages.render.artifact.tasks
+            .some((item) => item.segmentId === segment && item.status === 'completed' && existsSync(item.file ?? '')));
+          if (complete) {
+            fresh.stages.render.status = 'done';
+            fresh.stages.render.error = null;
+            if (fresh.pendingReview?.stage === 'render') fresh.pendingReview = null;
+          }
+          fresh.stages.edit.stale = Boolean(fresh.finalFile || fresh.stages.edit.finalFile);
+          event(fresh, { kind: 'segment-version', stage: 'render', text: `段 ${segmentId} 已切换素材版本` });
+        }
+        return ok({ segmentId, version });
+      });
+    },
+
+    /**
+     * 分镜局部编辑：只改一个镜头（提示词/时长）或一句台词，改完立刻重跑 13 道门，
+     * 不重新生成整条分镜。门禁不过就标成待复核，不会把坏分镜当成已通过。
+     */
+    async updateStoryboard(payload) {
+      const id = String(payload?.id ?? '');
+      if (!/^cs_[A-Za-z0-9_-]+$/.test(id)) return fail('bad-request', '项目编号无效');
+      const project = await store.load(id);
+      if (!project) return fail('not-found', '项目不存在');
+      if (jobs.has(id)) return fail('busy', '这个项目正在跑，等它停下来再改');
+      const record = project.stages?.storyboard;
+      if (!record?.artifact) return fail('not-ready', '还没有分镜，先把分镜阶段跑出来');
+      const shotPatch = payload?.shot ?? null;
+      const beatPatch = payload?.beat ?? null;
+      if (!shotPatch?.id && !beatPatch?.id) return fail('bad-request', '要改什么：给 shot.id 或 beat.id');
+
+      const doc = structuredClone(record.artifact);
+      let changed = 0;
+      try {
+        changed = patchStoryboard(doc, { shot: shotPatch, beat: beatPatch }).changed;
+      } catch (error) {
+        return fail('bad-request', error.message);
+      }
+      if (changed === 0) return fail('bad-request', '内容没有变化');
+
+      const context = await contextOf(project, 'storyboard');
+      const gate = await runGate('storyboard', doc, context);
+      const file = await store.writeArtifact(project, 'storyboard', doc).catch(() => null);
+      await store.update(id, (fresh) => {
+        const target = fresh.stages.storyboard;
+        target.artifact = doc;
+        target.editedAt = Date.now();
+        target.gate = { ok: gate.ok, failures: (gate.failures ?? []).slice(0, 12), at: Date.now() };
+        if (file) target.file = basename(file);
+        if (gate.ok) {
+          target.status = 'done';
+          target.issues = [];
+          target.error = null;
+        } else {
+          target.status = 'needs_review';
+          target.issues = (gate.failures ?? []).slice(0, 8);
+        }
+        event(fresh, {
+          kind: 'storyboard-edit',
+          stage: 'storyboard',
+          text: `手动改了 ${shotPatch?.id ?? beatPatch?.id}，门禁${gate.ok ? '通过' : `有 ${(gate.failures ?? []).length} 条未过`}`,
+        });
+      });
+      return ok({ gate, changed });
     },
 
     async decide(payload) {
@@ -1682,6 +1924,9 @@ export function apply(ctx, config = {}) {
       const stage = String(payload?.stage || project.pendingReview?.stage || '');
       if (!stage || !STAGE_IDS.includes(stage)) return fail('bad-request', '不知道要复核哪个阶段');
       if (decision === 'approve') {
+        if (stage === 'edit' && (!project.finalFile && !project.stages.edit.finalFile || project.stages.edit.stale || jobs.has(id))) {
+          return fail('not-ready', '请先合成当前素材，再通过成片');
+        }
         await store.update(id, (fresh) => {
           fresh.stages[stage] = { ...fresh.stages[stage], status: 'done', note: note || '人工复核通过', error: null, issues: [] };
           fresh.pendingReview = null;
@@ -1772,7 +2017,7 @@ export function apply(ctx, config = {}) {
       if (req.method !== 'POST') return sendJson(res, 405, fail('method-error', '只接可POST'));
       const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname;
       const endpoint = pathname.startsWith(`${API_PREFIX}/`) ? pathname.slice(API_PREFIX.length + 1) : '';
-      const handler = handlers[endpoint];
+      const handler = Object.hasOwn(handlers, endpoint) ? handlers[endpoint] : null;
       if (!handler) return sendJson(res, 404, fail('not-found', `未知操作 ${endpoint}`));
       let payload;
       try {
@@ -1816,6 +2061,14 @@ export function apply(ctx, config = {}) {
         else if (kind === 'segment') {
           const segmentId = url.searchParams.get('segmentId') ?? '';
           file = (project.stages.render?.artifact?.tasks ?? []).find((task) => String(task.segmentId) === segmentId)?.file;
+        } else if (kind === 'segment-version') {
+          const segmentId = url.searchParams.get('segmentId') ?? '';
+          const version = url.searchParams.get('version') ?? '';
+          const storyboard = await store.artifact(project, 'storyboard');
+          const versions = await segmentVersions(project, storyboard, project.stages.render?.artifact);
+          if (Object.hasOwn(versions, segmentId) && versions[segmentId].some((item) => item.id === version)) {
+            file = join(store.dirOf(id), 'segments', version);
+          }
         } else if (kind === 'portrait') {
           const characters = await store.artifact(project, 'characters');
           file = (characters?.characters ?? []).find((row) => row.name === url.searchParams.get('name'))?.portrait?.file;
@@ -2104,6 +2357,10 @@ export function apply(ctx, config = {}) {
       const project = await store.load(String(args.id));
       const stage = String(args.stage || project.pendingReview?.stage || '');
       if (!stage) return { error: '这个项目没有待复核项' };
+      if (stage === 'edit' && args.decision === 'approve'
+        && ((!project.finalFile && !project.stages.edit.finalFile) || project.stages.edit.stale || jobs.has(project.id))) {
+        return { error: '请先合成当前素材，再通过成片' };
+      }
       if (args.decision === 'rework') {
         await store.update(project.id, (fresh) => {
           fresh.stages[stage] = { ...fresh.stages[stage], status: 'empty', issues: args.note ? [args.note] : [], note: null };
@@ -2137,6 +2394,47 @@ export function apply(ctx, config = {}) {
           return textBlocks(lines.join('\n'));
         }
         return textBlocks('没有变化');
+      },
+    },
+  };
+
+  const editShotTool = {
+    name: 'creative_studio_edit_shot',
+    description:
+      '（创意工作台内置）改分镜里的一个镜头（提示词/动作/时长）或一句台词，改完立刻重跑 13 道门；不重新生成整条分镜，也不花钱。改完可以用 creative_studio_run(stage=render) 只重渲受影响的分段。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id'],
+      properties: {
+        id: { type: 'string', description: '项目 id' },
+        shotId: { type: 'string', description: '镜头 id，例如 E01-SH03' },
+        prompt: { type: 'string', description: '新的镜头提示词（至少 60 字）' },
+        action: { type: 'string', description: '新的动作描述（一镜只做一件事）' },
+        durationSec: { type: 'number', description: '这一镜的时长（秒）' },
+        beatId: { type: 'string', description: '要改的台词节拍 id' },
+        text: { type: 'string', description: '新的台词原文' },
+        speaker: { type: 'string', description: '说话人（可不填）' },
+      },
+    },
+    timeoutMs: 120_000,
+    async execute(args) {
+      const shot = args.shotId
+        ? { id: args.shotId, prompt: args.prompt, action: args.action, durationSec: args.durationSec }
+        : null;
+      const beat = args.beatId ? { id: args.beatId, text: args.text, speaker: args.speaker } : null;
+      const result = await handlers.updateStoryboard({ id: args.id, shot, beat });
+      if (!result.ok) return { error: result.error.message };
+      return { gate: result.value.gate, changed: result.value.changed };
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        if (value.error) return textBlocks(`没改成：${value.error}`);
+        const failures = value.gate?.failures ?? [];
+        return textBlocks(value.gate?.ok
+          ? `已改 ${value.changed} 处，13 道门全过`
+          : `已改 ${value.changed} 处，但门禁有 ${failures.length} 条没过：\n${failures.slice(0, 6).map((item) => `· ${item}`).join('\n')}`);
       },
     },
   };
@@ -2443,6 +2741,7 @@ export function apply(ctx, config = {}) {
       ctx.tools.register(statusTool),
       ctx.tools.register(runTool),
       ctx.tools.register(decideTool),
+      ctx.tools.register(editShotTool),
       ctx.tools.register(fromRefTool),
       ctx.tools.register(briefTool),
       ctx.tools.register(h3VideoTool),

@@ -173,25 +173,17 @@ const config = queue[0];
 const projects = queue[1];
 const selectedId = queue[2];
 const pageData = queue[3];
-const draft = {
-  title: pageData.project.title, productName: '清汤面', category: '小吃', audience: '夜归人',
-  sellingPoints: '一碗 12 块', tone: '温情', priceBand: '', forbidden: '最好', extra: '', targetSeconds: '45',
-};
-
 /** 每个阶段的详情视图都真的渲染一遍：useState 用队列喂值，函数组件当场执行。 */
-function render({ detail = '', briefOpen = false } = {}) {
+function render({ detail = '' } = {}) {
   queue.length = 0;
-  queue.push(config, projects, selectedId, pageData, false, '', '', false); // Panel
-  queue.push([], '', null, '', '', false, '', '', '', false); // 拉片台
-  queue.push(briefOpen, draft, ''); // BriefCard
-  queue.push('', ''); // ReferenceCard
+  queue.push(config, projects, 'production', selectedId, pageData, false, '', '', false); // Panel
   queue.push(detail, ''); // Pipeline
   return registration({ t: (key) => key, host: 'main' });
 }
 
 try {
   for (const detail of ['', 'idea', 'story', 'storyboard', 'characters', 'voice', 'render', 'edit']) {
-    const tree = render({ detail, briefOpen: detail === 'story' });
+    const tree = render({ detail });
     if (!tree || typeof tree !== 'object') throw new Error(`阶段 ${detail || '总览'} 没有返回元素树`);
     console.log(`✓ 阶段视图渲染通过：${detail || '总览（含待复核条 + 事件日志）'}`);
   }
@@ -219,11 +211,8 @@ const refEvidence = {
 let refTree;
 try {
   queue.length = 0;
-  queue.push(config, projects, selectedId, pageData, false, '', '', false);
+  queue.push(config, projects, 'library', selectedId, pageData, false, '', '', false);
   queue.push([{ id: 'cs_ref_demo', title: '拉片 · 某条爆款', updatedAt: Date.now() }], 'cs_ref_demo', refEvidence, '', '', false, '', '', '', false);
-  queue.push(false, draft, '');
-  queue.push('', '');
-  queue.push('', '');
   refTree = registration({ t: (key) => key, host: 'main' });
   if (!refTree || typeof refTree !== 'object') throw new Error('拉片台没有返回元素树');
   console.log('✓ 拉片台（联系表 + 逐镜帧 + 报告 + 复刻分镜）渲染通过');
@@ -233,11 +222,41 @@ try {
   process.exit(1);
 }
 
+// 审片标记必须跳到成片时间，并用各段原始时间对齐对比。
+const reviewPage = {
+  ...pageData,
+  project: {
+    ...pageData.project, finalFile: 'final.mp4',
+    stages: { ...pageData.project.stages, edit: { duration: 20, visual: { issues: [
+      { where: '第 2 张', action: 'segment', problem: '道具穿模' },
+    ] } } },
+  },
+  plan: [{ id: 'S1', seconds: 20, people: [], props: [], references: [] }],
+  timeline: [{ segmentId: 'S1', start: 0, end: 20, sourceStart: 0.5 }],
+  versions: { S1: [{ id: 'take1.mp4', current: true }, { id: 'take2.mp4', current: false }] },
+};
+queue.length = 0;
+queue.push(config, projects, 'review', selectedId, reviewPage, false, '', '', false);
+const reviewTree = registration({ t: (key) => key, host: 'main' });
+function findAll(node, selector) {
+  if (Array.isArray(node)) return node.flatMap((child) => findAll(child, selector));
+  if (!node || typeof node !== 'object') return [];
+  return [...(selector(node) ? [node] : []), ...findAll(node.children ?? [], selector)];
+}
+const reviewVideos = findAll(reviewTree, (node) => node.type === 'video' && node.props.ref);
+const marker = findAll(reviewTree, (node) => node.props?.['aria-label'] === 'inspectIssue 00:10.0')[0];
+if (reviewVideos.length !== 3 || !marker) throw new Error('缺少成片、双版本预览或跳转标记');
+for (const { props } of reviewVideos) props.ref.current = { duration: 30, currentTime: 0, pause() {} };
+marker.props.onClick();
+if (reviewVideos[0].props.ref.current.currentTime !== 10
+  || reviewVideos.slice(1).some(({ props }) => props.ref.current.currentTime !== 10.5)) {
+  throw new Error('审片跳转与素材对比时间不一致');
+}
+console.log('✓ 审片台通过：抽帧标记跳到成片，两个版本使用同一分段时间');
+
 // 空状态：没有项目时必须落到新建表单。
 queue.length = 0;
-queue.push({ projectDir: '', reviewThreshold: 80, stages: [], dimensions: [], voices: [], aspects: ['9:16'] }, [], '', null, false, '', '', false);
-queue.push([], '', null, '', '', false, '', '', '', false); // 拉片台
-queue.push({}); // 新建表单
+queue.push({ projectDir: '', reviewThreshold: 80, stages: [], dimensions: [], voices: [], aspects: ['9:16'] }, [], 'production', '', null, false, '', '', false);
 const empty = registration({ t: (key) => key, host: 'main' });
 if (!empty || typeof empty !== 'object') throw new Error('空状态没有返回元素树');
 console.log('✓ 空状态（无项目 → 拉片台 + 新建表单）渲染通过');
