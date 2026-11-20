@@ -30,7 +30,11 @@ import {
   gateRender,
 } from './engine/contracts.js';
 import { createAgents, extractJson } from './engine/agents.js';
+import { loadMachineOverrides, resolveConfig } from './engine/config.js';
+import { runDoctor } from './engine/doctor.js';
 import { createReference } from './engine/reference.js';
+import { detectBurnedCaptions } from './engine/burned-captions.js';
+import { matchesStamp, promptLayerFingerprint } from './engine/fingerprint.js';
 import { runVisionReview } from './engine/rea-vision.js';
 import { createVideoEngine, createVideoTaskStore, findCodex, mimeOf, priceOf, taskView } from './engine/video.js';
 import { createMedia, fadeFlagsOf } from './engine/media.js';
@@ -39,77 +43,6 @@ import { createOpenFilmFinisher } from './engine/openfilm.js';
 const API_PREFIX = '/creative-studio/api';
 const FILE_ROUTE = '/creative-studio/file';
 const BODY_LIMIT = 4 * 1024 * 1024;
-
-const DEFAULTS = {
-  projectDir: '',
-  /** 独立出片任务与生图的数据目录（原来的 video-h3 用的就是这套） */
-  dataDir: '',
-  llmTimeoutMs: 300_000,
-  llmMaxTokens: 8000,
-  reviewThreshold: 80,
-  /** strict：审核必须说 pass 且到阈值；balanced：门禁过、无 blocker、分数 ≥ 阈值-12 就带建议收下。 */
-  reviewPolicy: 'balanced',
-  maxRework: 2,
-  aspectRatio: '9:16',
-  resolution: '720p',
-  seconds: 5,
-  videoModel: 'minimax-h3-mini',
-  videoProvider: 'auto',
-  easyframeApiKey: '',
-  easyframeBaseUrl: 'https://minimax.api.easyframe.cn',
-  mnmxBaseUrl: 'https://www.runlive.top/mnmx',
-  mnmxCardKey: '',
-  promptOptimization: true,
-  trimSubtitleBand: true,
-  subtitleBandRatio: 0.18,
-  imageBaseUrl: 'http://127.0.0.1:38650/v1',
-  imageKey: '',
-  imageModel: 'gpt-image-2',
-  /** 生图后端：auto 有 Codex 就用 Codex，否则走 HTTP；也可强制 'codex' / 'http'。 */
-  imageBackend: 'auto',
-  /** Codex 命令行路径；留空自动在 %ProgramFiles%\WindowsApps\OpenAI.Codex_* 下找。 */
-  codexCmd: '',
-  ffmpegPath: '',
-  bgmDir: '',
-  outWidth: 1080,
-  outHeight: 1920,
-  skillDir: '',
-  notifyWebhook: '',
-  /** 参考爆款（拉片）用的脚本与解释器 */
-  scriptsDir: '',
-  nodePath: '',
-  pythonPath: '',
-  asrModel: 'medium',
-  /** 可选：浏览器导出的 cookies.txt 路径（抖音「新鲜 cookie」），填了就能直接按链接下载。 */
-  cookiesFile: '',
-  /** 可选：rea-video 可执行文件（逐镜判定 实拍/AI/代码 + 复刻路线）。留空就不跑。 */
-  reaVideoCmd: '',
-  /** rea-video 拉完后，用当前能看图的模型做逐镜看图复核（agent 当 VLM）。 */
-  reaVision: true,
-  /** 一次复核最多看几个镜头（优先低置信的）。 */
-  reaVisionShots: 12,
-  reaVisionBy: 'dsh',
-  /**
-   * 收尾器：'auto' 有 OpenFilm 就用它、没有就退回 ffmpeg；'openfilm' 只走 OpenFilm；'ffmpeg' 只走老路径。
-   * 走 OpenFilm 时成片同时是一份可手改的 film.html，多拿字幕带 / LUT / 4K，并附一份逐帧体检。
-   */
-  finisher: 'auto',
-  /** OpenFilm 命令行：留空则依次试 openfilmCheckouts 与 PATH 上的 openfilm（`npm i -g openfilm` 装的那个）。 */
-  openfilmCmd: '',
-  /** 本机检出目录（可选）：只在没装 npm 全局包时用，指向 packages/openfilm/bin/openfilm.mjs。 */
-  openfilmCheckouts: [],
-  /** 渲染并发（浏览器数），0 让 OpenFilm 自己决定。 */
-  openfilmWorkers: 0,
-  /**
-   * 画质档：'native' 原生渲（快，1080×1920 约 1.2 Mbps）；
-   * 'high' 先按 2 倍画出来再降采样到交付尺寸（慢约 4 倍，细节明显更实，码率由 openfilmBitrate 控制）。
-   */
-  openfilmQuality: 'native',
-  /** 降采样时的目标码率（Mbps），0 用 CRF 18（按画面难度自动给码率）。只在 openfilmQuality: 'high' 时生效。 */
-  openfilmBitrate: 0,
-  /** 渲染完跑一遍 look 逐帧体检（白闪 / 黑帧 / 静帧 / 响度），结果进审核证据。 */
-  openfilmLook: true,
-};
 
 /**
  * 清洗用户贴进来的输入：浏览器/微信复制时常带首尾引号、书名号、空白甚至换行。
@@ -144,23 +77,6 @@ function normalizeSource(urlRaw, localRaw) {
 }
 
 const log = (...args) => console.error('[creative-studio]', ...args);
-
-/**
- * 本机覆盖文件：~/.dsh/creative-studio/machine.json（不要提交到仓库）。
- * 里面可以放密钥、本机路径、可执行文件位置；插件配置留空时才读它，再其次读环境变量。
- * 这样仓库里的 cordis.patch.yml 保持干净，换机器只改这一个文件。
- */
-function loadMachineOverrides() {
-  const file = join(homedir(), '.dsh', 'creative-studio', 'machine.json');
-  try {
-    if (!existsSync(file)) return {};
-    const parsed = JSON.parse(readFileSync(file, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (error) {
-    log(`machine.json 读取失败（忽略）：${error.message}`);
-    return {};
-  }
-}
 
 const sendJson = (res, status, payload) => {
   const body = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -202,45 +118,7 @@ const nowIso = () => new Date().toISOString();
 export const inject = ['connection', 'webServer', 'tools', 'llm', 'attachments'];
 
 export function apply(ctx, config = {}) {
-  const options = { ...DEFAULTS, ...(config ?? {}) };
-  const machine = loadMachineOverrides();
-  /** 配置里没写就用本机文件，再其次环境变量；留空的值一律视为没写。 */
-  const fill = (key, envNames = []) => {
-    if (options[key]) return;
-    const fromFile = typeof machine[key] === 'string' ? machine[key].trim() : '';
-    if (fromFile) {
-      options[key] = fromFile;
-      return;
-    }
-    for (const name of envNames) {
-      if (process.env[name]) {
-        options[key] = process.env[name];
-        return;
-      }
-    }
-  };
-  fill('dataDir', ['CREATIVE_STUDIO_DATA']);
-  fill('projectDir', ['CREATIVE_STUDIO_PROJECTS']);
-  fill('easyframeApiKey', ['EASYFRAME_API_KEY']);
-  fill('mnmxCardKey', ['MNMX_CARD_KEY']);
-  fill('imageKey', ['IMAGE_API_KEY', 'OPENAI_API_KEY']);
-  fill('imageBackend');
-  fill('codexCmd', ['CODEX_BIN']);
-  fill('ffmpegPath', ['FFMPEG_PATH']);
-  fill('bgmDir');
-  fill('skillDir');
-  fill('scriptsDir');
-  fill('reaVideoCmd');
-  fill('openfilmCmd', ['OPENFILM_BIN']);
-
-  const dataRoot = options.dataDir || join(homedir(), '.dsh', 'creative-studio');
-  /** 阶段提示词的外置目录：<dataDir>/prompts/<stage>.md，文件存在就覆盖内置写法。 */
-  const promptsDir = options.promptsDir || join(dataRoot, 'prompts');
-  // 技能目录留空就用 ~/.dsh/skills 下的标准位置，换机器不用改配置。
-  if (!options.skillDir) options.skillDir = join(homedir(), '.dsh', 'skills', 'shot-contract');
-  if (!options.scriptsDir) options.scriptsDir = join(homedir(), '.dsh', 'skills', 'douyin-teardown', 'scripts');
-
-  const projectRoot = options.projectDir || join(dataRoot, 'projects');
+  const { options, dataRoot, projectRoot, promptsDir } = resolveConfig(config, loadMachineOverrides({ log }));
   const inboxFile = join(dataRoot, 'inbox.json');
   /** 正在跑的项目：id -> { stage, startedAt, stageStartedAt } */
   const jobs = new Map();
@@ -322,6 +200,18 @@ export function apply(ctx, config = {}) {
       return { provider: String(selection.provider), model: String(selection.model) };
     }
     throw new Error('读不到默认模型：请先在设置里选一个模型，再跑创意工作台');
+  }
+
+  /** 阶段指纹：谁做的这一版（模型 + 提示词层）。读不到模型时退化成 unknown，不阻断流程。 */
+  function stageFingerprint() {
+    let model = 'unknown';
+    try {
+      const route = resolveRoute();
+      model = `${route.provider}:${route.model}`;
+    } catch {
+      model = 'unknown';
+    }
+    return { model, prompts: promptLayerFingerprint(promptsDir) };
   }
 
   /** 推理档位取模型声明的最低一档：JSON 生成不需要长思考，也不要把输出预算烧在思考上。 */
@@ -522,6 +412,20 @@ export function apply(ctx, config = {}) {
         video = fetched.video;
       }
       const framed = await reference.frames({ video, dir, onStage: stage });
+      // 烧字检测：素材画面上已经压了文字的话，复刻时再叠字幕就是双字幕，且剪辑阶段补不回来。
+      // 检测失败不致命（detected:null = 没有结论），不阻断拉片。
+      let burnedCaption = null;
+      try {
+        burnedCaption = await detectBurnedCaptions({
+          video,
+          seconds: framed.duration,
+          ffmpegPath: options.ffmpegPath || 'ffmpeg',
+          log,
+        });
+      } catch (error) {
+        burnedCaption = { detected: null, reason: error.message };
+        log(`[reference] 烧字检测失败（不影响继续）：${error.message}`);
+      }
       const asr = await reference.asr({ audio: framed.audio, dir, onStage: stage });
       // 可选的高级拆解：逐镜判定实拍/AI/代码，并给出复刻路线。失败不致命。
       let rea = null;
@@ -565,6 +469,7 @@ export function apply(ctx, config = {}) {
         summary: evidence.summary,
         shotCount: framed.shotCount,
         duration: framed.duration,
+        burnedCaption,
         shotTable: evidence.shotTable,
         frames: evidence.frames ?? [],
         contactSheet: evidence.contactSheet ?? null,
@@ -768,6 +673,8 @@ export function apply(ctx, config = {}) {
         if (gate.ok && review.pass) {
           record.status = 'done';
           record.error = null;
+          // 记下这一版是谁做的：换模型或改提示词后，下游据此判定旧产物失效。
+          record.stamp = stageFingerprint();
           const notes = (review.issues ?? []).slice(0, 6).map((issue) => `[${issue.severity ?? 'major'}] ${issue.where ?? ''}：${issue.problem ?? ''}`);
           record.issues = review.acceptedWithNotes ? notes : [];
           record.note = null;
@@ -1437,7 +1344,18 @@ export function apply(ctx, config = {}) {
           break;
         }
         project = await store.load(id);
-        if (stage !== 'render' && stage !== 'edit' && project.stages[stage]?.status === 'done' && !note) {
+        // 阶段指纹：换模型或改提示词后，旧的「已完成」不再算数，否则新模型会拿旧判断往下做。
+        // 没有指纹的老项目按「不知道」处理，继续跳过——不因为一次升级让历史项目全部白跑。
+        const stamp = stageFingerprint();
+        const previousStamp = project.stages[stage]?.stamp ?? null;
+        const staleReason = previousStamp && !matchesStamp(previousStamp, stamp)
+          ? `上一版是 ${previousStamp.model} / 提示词 ${previousStamp.prompts} 做的，现在是 ${stamp.model} / ${stamp.prompts}`
+          : null;
+        if (staleReason) {
+          event(project, { kind: 'stage-stale', stage, text: `${STAGE_BY_ID[stage].label}的旧产物作废，重跑：${staleReason}` });
+          await store.save(project, { pipeline: true });
+        }
+        if (stage !== 'render' && stage !== 'edit' && project.stages[stage]?.status === 'done' && !note && !staleReason) {
           results.push({ stage, skipped: true });
           continue;
         }
@@ -1565,6 +1483,11 @@ export function apply(ctx, config = {}) {
         voices: VOICE_CATALOG,
         statuses: STAGE_STATUS,
       });
+    },
+
+    /** 环境自检：装完先跑一遍，缺什么、怎么补一条条列出来 */
+    async doctor() {
+      return ok(runDoctor({ options, dataRoot, projectRoot, promptsDir }));
     },
 
     /** 提示词模板：列出现有覆盖文件（没写就是内置写法） */

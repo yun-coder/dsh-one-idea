@@ -6,6 +6,7 @@
  * 以及 ffmpeg 剪辑管线（用合成片段跑一遍归一/拼接/混音/抽帧）。
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,7 +17,11 @@ import {
 } from '../engine/contracts.js';
 import { extractJson } from '../engine/agents.js';
 import { createAgents } from '../engine/agents.js';
+import { resolveConfig } from '../engine/config.js';
+import { runDoctor } from '../engine/doctor.js';
 import { platformOf, checkPlatform, platformBrief } from '../engine/platform.js';
+import { glyphFraction, overlapScore, verdictOf, sampleTimes, detectBurnedCaptions } from '../engine/burned-captions.js';
+import { matchesStamp, promptLayerFingerprint } from '../engine/fingerprint.js';
 import { createStore, newProject, event } from '../engine/store.js';
 import { createMedia } from '../engine/media.js';
 
@@ -349,6 +354,82 @@ console.log('\n[10] 提示词外置覆盖');
   });
   await bare.produce({ stage: 'story', project: { title: '测试', targetSeconds: 30, brief: {} }, context: {} });
   check('没有覆盖文件时不出现自定义段落', !plain.includes('自定义阶段指令（story.md）'));
+  await rm(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[11] 烧字检测：三带扫描，静态台标不算字幕');
+const lineCanvas = (() => {
+  const width = 40;
+  const height = 40;
+  const gray = new Uint8Array(width * height);
+  for (let x = 8; x < 32; x += 1) gray[20 * width + x] = 255; // 中间一条亮线
+  return { gray, width, height };
+})();
+check('带内亮像素+暗边算成字形', glyphFraction(lineCanvas.gray, lineCanvas.width, lineCanvas.height, 0.4, 0.6) > 0);
+check('带外没有字', glyphFraction(lineCanvas.gray, lineCanvas.width, lineCanvas.height, 0.7, 0.9) === 0);
+check('掩码与自身完全重合', overlapScore([1, 2, 3], [1, 2, 3]) === 1);
+check('不相交的掩码重合度为 0', overlapScore([1, 2, 3], [4, 5, 6]) === 0);
+const movingText = Array.from({ length: 8 }, (_, index) => ({ fraction: 0.02, mask: [index * 100, index * 100 + 1] }));
+check('逐帧变化的文字判成烧字', verdictOf(movingText).detected, JSON.stringify(verdictOf(movingText)));
+const staticLogo = Array.from({ length: 8 }, () => ({ fraction: 0.02, mask: [1, 2, 3, 4] }));
+check('静态台标不判成烧字', !verdictOf(staticLogo).detected);
+const occasional = [{ fraction: 0.02, mask: [1] }, ...Array.from({ length: 7 }, () => ({ fraction: 0, mask: [] }))];
+check('零星出现不算持续文字', !verdictOf(occasional).detected);
+const burnTimes = sampleTimes(100, 5);
+check('取样点落在片头片尾之间', burnTimes[0] === 8 && burnTimes[burnTimes.length - 1] === 92 && burnTimes.every((time) => time >= 8 && time <= 92) && burnTimes.length === 5, JSON.stringify(burnTimes));
+check('没有时长时不出采样点', sampleTimes(null, 5).length === 0);
+
+const burnedProject = { platform: 'douyin', targetSeconds: 13, reference: { burnedCaption: { detected: true, band: [0.42, 0.72] } } };
+const bothSubtitles = gateEdit({ ...goodEdl, subtitles: { enabled: true, note: '' } }, { render: timedRender, project: burnedProject });
+check('素材有烧字还开字幕被拦', !bothSubtitles.ok && bothSubtitles.failures.some((line) => line.includes('双字幕')), bothSubtitles.failures.join(' / '));
+const noSubtitles = gateEdit({ ...goodEdl, subtitles: { enabled: false, note: '' } }, { render: timedRender, project: burnedProject });
+check('关掉字幕放行并提示原烧字仍在', noSubtitles.ok && noSubtitles.advisories.some((line) => line.includes('烧字')), noSubtitles.advisories.join(' / '));
+check('没有参考素材时这条门不触发', gateEdit(goodEdl, { render: timedRender, project: { platform: 'douyin', targetSeconds: 13 } }).ok);
+
+const burnedSample = 'D:/智贸/04-素材/autoclip-实测/01-被四人围堵-76s.mp4';
+if (existsSync(burnedSample)) {
+  const detected = await detectBurnedCaptions({ video: burnedSample, seconds: 76.65, ffmpegPath, samples: 6 });
+  check('真实带烧字素材被检出（中置带）', detected.detected === true && detected.bandName === 'middle', JSON.stringify(detected.bands));
+  check('检出结果带可用区间', Array.isArray(detected.band) && detected.band.length === 2, JSON.stringify(detected.band));
+} else {
+  check('真实带烧字素材被检出（本机没有样例，跳过）', true);
+  check('检出结果带可用区间（跳过）', true);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[12] 阶段指纹：模型或提示词变了，旧产物就该失效');
+const fingerprint = promptLayerFingerprint();
+check('指纹稳定且是 12 位十六进制', fingerprint === promptLayerFingerprint() && /^[0-9a-f]{12}$/.test(fingerprint), fingerprint);
+const promptDir = await mkdtemp(join(tmpdir(), 'fp-'));
+await writeFile(join(promptDir, 'storyboard.md'), '自定义分镜指令', 'utf8');
+const withOverride = promptLayerFingerprint(promptDir);
+check('外置提示词参与指纹', withOverride !== fingerprint, `${fingerprint} vs ${withOverride}`);
+await writeFile(join(promptDir, 'storyboard.md'), '改过一句话的自定义分镜指令', 'utf8');
+check('提示词内容一改指纹就变', promptLayerFingerprint(promptDir) !== withOverride);
+await rm(promptDir, { recursive: true, force: true });
+
+const stamp = { model: 'deepseek:deepseek-chat', prompts: fingerprint };
+check('模型与提示词都一致才叫同一版', matchesStamp(stamp, { model: 'deepseek:deepseek-chat', prompts: fingerprint }));
+check('换了模型就不算同一版', !matchesStamp(stamp, { model: 'qwen:qwen3', prompts: fingerprint }));
+check('改了提示词就不算同一版', !matchesStamp(stamp, { model: 'deepseek:deepseek-chat', prompts: 'ffffffffffff' }));
+check('没有指纹的老项目不当作一致', !matchesStamp(null, { model: 'deepseek:deepseek-chat', prompts: fingerprint }));
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+console.log('\n[11] 环境自检');
+{
+  const dir = await mkdtemp(join(tmpdir(), 'cs-doctor-'));
+  const resolved = resolveConfig({
+    dataDir: join(dir, 'data'),
+    projectDir: join(dir, 'projects'),
+    skillDir: join(dir, 'no-skill'),
+    scriptsDir: join(dir, 'no-scripts'),
+    ffmpegPath,
+  });
+  const report = runDoctor(resolved);
+  check('doctor 找出缺 shot-contract', report.items.some((item) => item.status === 'fail' && item.name.includes('shot-contract')));
+  check('doctor 汇总可信', report.summary.ok > 0 && report.summary.fail >= 1 && report.ok === false);
   await rm(dir, { recursive: true, force: true });
 }
 

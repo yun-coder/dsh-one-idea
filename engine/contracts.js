@@ -534,6 +534,19 @@ export function gateEdit(edl, { render = null, project = null } = {}) {
   }
   if (chars(edl?.packaging?.title) < 6) push(failures, '发布包缺少标题（packaging.title，至少 6 字）');
   if (asArray(edl?.packaging?.hashtags).length < 2) push(failures, '发布包缺少至少 2 个话题标签');
+  // 双字幕：参考素材已经烧了文字，成片再叠一层，两行走在同一个画面上。
+  // 这条是 hard——剪辑阶段补不回来，只能现在决定关字幕或挪位置。
+  const burned = project?.reference?.burnedCaption;
+  if (burned?.detected === true) {
+    const where = Array.isArray(burned.band)
+      ? `${Math.round(burned.band[0] * 100)}%–${Math.round(burned.band[1] * 100)}% 高度`
+      : '画面中';
+    if (edl?.subtitles?.enabled !== false) {
+      push(failures, `参考素材在 ${where}已经有烧字，成片再叠字幕就是双字幕：把 subtitles.enabled 设成 false，或只把字幕放在该区域之外`);
+    } else {
+      platformCheck.advisories.push(`字幕已关闭，但参考素材原有的烧字仍会在 ${where}露出来：介意的话裁画幅或换一条更干净的素材`);
+    }
+  }
   return {
     ...ok(failures),
     platform: platformCheck.platform?.id ?? null,

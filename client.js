@@ -174,6 +174,10 @@ window.__ModuleLoader__.load({
       shotEditSaved: '已保存，门禁已重跑',
       passedWithNotes: '带建议通过',
       promptTab: '提示词模板',
+      doctorTitle: '环境自检',
+      doctorHint: '装完先跑一遍：Node、目录、ffmpeg、分镜技能、出片密钥、生图后端，缺什么怎么补都会列出来。',
+      doctorRun: '运行自检',
+      doctorRunning: '检查中…',
       promptHint: '每一段的指令可以改：保存后会追加到内置阶段指令后面，冲突时以这里为准；JSON 结构与门禁要求不能被改掉。留空保存 = 恢复默认。',
       promptName: '阶段',
       promptSave: '保存',
@@ -375,6 +379,10 @@ window.__ModuleLoader__.load({
       shotEditSaved: 'Saved; gates re-ran',
       passedWithNotes: 'Passed with notes',
       promptTab: 'Prompt templates',
+      doctorTitle: 'Environment check',
+      doctorHint: 'Run once after install: Node, folders, ffmpeg, storyboard skill, render keys and image backend, each with a fix hint.',
+      doctorRun: 'Run check',
+      doctorRunning: 'Checking…',
       promptHint: 'Each stage instruction can be extended: saved text is appended to the built-in instruction and wins on conflict; JSON structure and gates stay mandatory. Save empty to restore defaults.',
       promptName: 'Stage',
       promptSave: 'Save',
@@ -1823,6 +1831,49 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // 环境自检
+    // ---------------------------------------------------------------------
+    function DoctorCard({ t }) {
+      const [report, setReport] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const run = async () => {
+        setBusy(true);
+        setError('');
+        try {
+          const result = await call('doctor', {});
+          setReport(result);
+        } catch (caught) {
+          setError(String(caught.message ?? caught));
+        } finally {
+          setBusy(false);
+        }
+      };
+      const colorOf = (status) => (status === 'fail' ? 'var(--dsw-alias-state-error-primary)' : status === 'warn' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-state-success-primary)');
+      return h('section', { style: s.card },
+        h('div', { style: s.row },
+          h('h3', { style: { margin: 0, fontSize: '16px' } }, t('doctorTitle')),
+          h('div', { style: s.spacer }),
+          h('button', { type: 'button', style: { ...s.btnGhost, ...(busy ? s.disabled : {}) }, disabled: busy, onClick: () => void run() }, busy ? t('doctorRunning') : t('doctorRun')),
+        ),
+        h('p', { style: s.meta }, t('doctorHint')),
+        error ? h('p', { style: s.err }, error) : null,
+        report
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+            h('div', { style: s.row },
+              Badge({ tone: report.ok ? 'good' : 'bad', children: `${report.summary.ok} 通过 · ${report.summary.warn} 提醒 · ${report.summary.fail} 失败` }),
+            ),
+            ...report.items.map((item, index) => h('div', { key: index, style: { display: 'flex', flexDirection: 'column', gap: '1px' } },
+              h('span', { style: { ...s.meta, fontSize: '12px', color: colorOf(item.status) } },
+                `${item.status === 'ok' ? '✓' : item.status === 'warn' ? '!' : '✗'} ${item.name}：${item.detail}`),
+              item.fix && item.status !== 'ok' ? h('span', { style: { ...s.meta, paddingLeft: '14px' } }, `→ ${item.fix}`) : null,
+            )),
+          )
+          : null,
+      );
+    }
+
+    // ---------------------------------------------------------------------
     // 提示词模板
     // ---------------------------------------------------------------------
     function PromptsEditor({ t }) {
@@ -2205,7 +2256,10 @@ window.__ModuleLoader__.load({
           }, label)),
         ),
         workspaceTab === 'prompts'
-          ? h(PromptsEditor, { t })
+          ? h(React.Fragment, null,
+            h(DoctorCard, { t }),
+            h(PromptsEditor, { t }),
+          )
           : workspaceTab === 'library'
           ? h(ReferenceStudio, {
             t,

@@ -287,6 +287,10 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 | `reviewThreshold` | 审核通过线（0–100），默认 80 |
 | `reviewPolicy` | `balanced`（默认）：门禁过、无 blocker、分数 ≥ 阈值−12 就带建议收下；`strict`：必须审核说 pass 且到阈值 |
 | `promptsDir` | 阶段提示词外置目录，默认 `<dataDir>/prompts`；`<stage>.md` 存在就追加到内置指令后面 |
+
+### 环境自检
+
+`npm run doctor` 或面板「提示词模板」页的「运行自检」：检查 Node、`machine.json`、项目/数据目录可写、ffmpeg、shot-contract、拉片脚本、rea-video、Codex、OpenFilm、出片密钥、生图后端与包内文件，逐项给修复提示；有失败项时退出码 1。
 | `maxRework` | 单阶段自动重做次数，默认 2 |
 | `aspectRatio` / `resolution` / `videoModel` | 出片默认档位 |
 | `videoProvider` | `auto` / `easyframe` / `mnmx` |

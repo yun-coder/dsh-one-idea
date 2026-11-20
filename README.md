@@ -40,6 +40,13 @@ dsh plugin --profile <profile> add https://github.com/<you>/dsh-creative-studio
 
 也可以在 **插件 → 添加插件** 里填本地目录。装完刷新页面，左侧栏出现「创意工作台」。
 
+装完先跑一次自检，缺什么会一条条列出来（面板「提示词模板」页也有同一个按钮）：
+
+```bash
+dsh ... # 或直接在包目录
+npm run doctor
+```
+
 ### 可选依赖（缺了会降级，不会崩）
 
 | 组件 | 用途 | 没装时 |
@@ -107,6 +114,7 @@ OpenAI 兼容端点。也可以强制 `codex` 或 `http`。
 ## 开发
 
 ```bash
+node test/doctor.mjs        # 环境自检：Node/目录/ffmpeg/分镜技能/密钥/生图后端，缺什么给修复提示
 node test/selftest.mjs      # 门禁 / JSON / 仓库 / ffmpeg 剪辑管线 / 提示词覆盖
 node test/panel-smoke.mjs   # 面板整棵树渲染（不需要浏览器）
 node test/eval.mjs          # 门禁评测集：17 条好/坏样例回归（改提示词或门禁后跑）

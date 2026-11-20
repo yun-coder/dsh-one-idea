@@ -40,7 +40,8 @@
   },
   "scripts": {
     "test": "node test/selftest.mjs && node test/panel-smoke.mjs",
-    "eval": "node test/eval.mjs"
+    "eval": "node test/eval.mjs",
+    "doctor": "node test/doctor.mjs"
   },
   "dsh": {
     "bundle": {
