@@ -38,6 +38,10 @@
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
+  "scripts": {
+    "test": "node test/selftest.mjs && node test/panel-smoke.mjs",
+    "eval": "node test/eval.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

@@ -38,6 +38,7 @@ export const STAGE_STATUS = {
   needs_review: '待人工复核',
   failed: '失败',
   skipped: '已跳过',
+  interrupted: '已中断',
 };
 
 const emptyStage = () => ({

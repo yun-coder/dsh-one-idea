@@ -7,6 +7,7 @@
  */
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
+import { audioTargetOf, checkPlatform } from './platform.js';
 
 /** 人物形象的六个维度：缺一维就不算一个能被生成的「人」。 */
 export const SIX_DIMENSIONS = [
@@ -298,16 +299,29 @@ export function gateStoryboard(doc, project = {}, shotContract = null) {
   if (target > 0 && total > 0 && Math.abs(total - target) / target > 0.35) {
     push(extra, `分镜合计 ${Math.round(total)} 秒，和目标 ${target} 秒差太远（允许 ±35%）`);
   }
+  // 平台适配：分镜合计时长与画幅，是不是真的能发到这个平台（策略表见 engine/platform.js）。
+  // hard 进 failures（发不出去），advisory 单列出来给审核 Agent 参考，不否决。
+  const platformCheck = checkPlatform(project, { seconds: total });
+  for (const message of platformCheck.failures) push(extra, message);
   if (!shotContract?.validate) {
     push(extra, '没有找到 shot-contract 技能，13 道结构门没能跑');
-    return { ok: false, failures: extra, gates: [], note: 'skill-missing' };
+    return {
+      ok: false, failures: extra, gates: [], note: 'skill-missing',
+      platform: platformCheck.platform?.id ?? null, advisories: platformCheck.advisories,
+    };
   }
   const report = shotContract.validate(doc);
   const gates = report.results.map((gate) => ({ id: gate.id, name: gate.name, failures: gate.failures }));
   for (const gate of gates) {
     for (const message of gate.failures.slice(0, 4)) failures.push(`${gate.id} ${gate.name}：${message}`);
   }
-  return { ok: failures.length === 0 && extra.length === 0, failures: [...failures, ...extra], gates };
+  return {
+    ok: failures.length === 0 && extra.length === 0,
+    failures: [...failures, ...extra],
+    gates,
+    platform: platformCheck.platform?.id ?? null,
+    advisories: platformCheck.advisories,
+  };
 }
 
 /** 把分镜切成「段」：一段 = 一次生成任务。 */
@@ -507,11 +521,24 @@ export function gateEdit(edl, { render = null, project = null } = {}) {
   if (target > 0 && complete && Math.abs(total - target) / target > 0.1) {
     push(failures, `成片总长 ${total.toFixed(1)} 秒，和目标 ${target} 秒差超过 10%：按每段真实可用时长重排 trim 后重新提交`);
   }
+  // 平台适配：真实成片时长与画幅（画幅取自项目），响度区间也按平台取，不再全局硬编码。
   const lufs = Number(edl?.audio?.lufs);
-  if (!Number.isFinite(lufs) || lufs < -20 || lufs > -8) push(failures, `响度目标 ${edl?.audio?.lufs ?? '（空）'} 不合理（短视频建议 -16 到 -12 LUFS）`);
+  const platformCheck = checkPlatform(project, { seconds: complete ? total : null });
+  for (const message of platformCheck.failures) push(failures, message);
+  const audioTarget = audioTargetOf(project);
+  const [lufsLow, lufsHigh] = audioTarget.hard;
+  const [lufsIdealLow, lufsIdealHigh] = audioTarget.ideal;
+  const platformLabel = platformCheck.platform?.label ?? '短视频';
+  if (!Number.isFinite(lufs) || lufs < lufsLow || lufs > lufsHigh) {
+    push(failures, `响度目标 ${edl?.audio?.lufs ?? '（空）'} 不合理（${platformLabel}建议 ${lufsIdealLow} 到 ${lufsIdealHigh} LUFS，硬性可接受 ${lufsLow} 到 ${lufsHigh}）`);
+  }
   if (chars(edl?.packaging?.title) < 6) push(failures, '发布包缺少标题（packaging.title，至少 6 字）');
   if (asArray(edl?.packaging?.hashtags).length < 2) push(failures, '发布包缺少至少 2 个话题标签');
-  return ok(failures);
+  return {
+    ...ok(failures),
+    platform: platformCheck.platform?.id ?? null,
+    advisories: platformCheck.advisories,
+  };
 }
 
 /** 各阶段门禁的调度表。 */

@@ -11,7 +11,7 @@
  *
  * 面板只发请求：文件系统、密钥、模型调用、ffmpeg 全在这一侧。
  */
-import { mkdir, copyFile, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
@@ -234,6 +234,8 @@ export function apply(ctx, config = {}) {
   fill('openfilmCmd', ['OPENFILM_BIN']);
 
   const dataRoot = options.dataDir || join(homedir(), '.dsh', 'creative-studio');
+  /** 阶段提示词的外置目录：<dataDir>/prompts/<stage>.md，文件存在就覆盖内置写法。 */
+  const promptsDir = options.promptsDir || join(dataRoot, 'prompts');
   // 技能目录留空就用 ~/.dsh/skills 下的标准位置，换机器不用改配置。
   if (!options.skillDir) options.skillDir = join(homedir(), '.dsh', 'skills', 'shot-contract');
   if (!options.scriptsDir) options.scriptsDir = join(homedir(), '.dsh', 'skills', 'douyin-teardown', 'scripts');
@@ -243,10 +245,56 @@ export function apply(ctx, config = {}) {
   /** 正在跑的项目：id -> { stage, startedAt, stageStartedAt } */
   const jobs = new Map();
   const store = createStore({ root: projectRoot, isRunning: (id) => jobs.has(id) });
+  /** 任务队列落盘：宿主重启后靠它把中断的阶段标出来，而不是一直显示"进行中"。 */
+  const queueFile = join(dataRoot, 'queue.json');
+  const persistQueue = () => {
+    const rows = [...jobs.entries()].map(([jobId, job]) => ({
+      id: jobId,
+      stage: job.stage,
+      startedAt: job.startedAt,
+      stageStartedAt: job.stageStartedAt ?? null,
+    }));
+    writeFile(queueFile, JSON.stringify(rows, null, 2), 'utf8').catch(() => {});
+  };
+  const beginJob = (jobId, job) => {
+    jobs.set(jobId, job);
+    persistQueue();
+  };
+  const endJob = (jobId) => {
+    jobs.delete(jobId);
+    persistQueue();
+  };
+  // 启动时恢复：上次进程里的 running 都是死的，标成 interrupted 并写清怎么续跑。
+  void (async () => {
+    try {
+      const text = await readFile(queueFile, 'utf8').catch(() => '');
+      const parsed = text ? JSON.parse(text) : [];
+      // 兼容手写/单条对象：正常写的是数组，但别让一个格式问题把恢复整段跳过。
+      const rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? [parsed] : [];
+      for (const row of rows) {
+        const id = String(row?.id ?? '');
+        if (!/^cs_[A-Za-z0-9_-]+$/.test(id)) continue;
+        const stage = String(row?.stage ?? '');
+        await store.update(id, (project) => {
+          const record = project.stages?.[stage];
+          if (record) {
+            record.status = 'interrupted';
+            record.error = `宿主重启，这一轮被中断；从「${STAGE_BY_ID[stage]?.label ?? stage}」再跑一次就能续上`;
+          }
+          project.running = null;
+          event(project, { kind: 'run-interrupted', stage, text: `宿主重启，${STAGE_BY_ID[stage]?.label ?? stage}被中断` });
+        }).catch(() => {});
+        log(`恢复队列：${id} 的 ${stage} 标记为已中断`);
+      }
+      await writeFile(queueFile, '[]', 'utf8').catch(() => {});
+    } catch (error) {
+      log(`恢复任务队列失败（忽略）：${error.message}`);
+    }
+  })();
   const media = createMedia({ ffmpegPath: options.ffmpegPath, log });
   const openfilm = createOpenFilmFinisher({ config: options, log, media });
   const video = createVideoEngine({ config: options, log });
-  const agents = createAgents({ callModel, config: options });
+  const agents = createAgents({ callModel, config: { ...options, promptsDir } });
   const reference = createReference({
     scriptsDir: options.scriptsDir,
     nodePath: options.nodePath,
@@ -1374,7 +1422,7 @@ export function apply(ctx, config = {}) {
   async function runPipeline(id, { from, note, signal, internal = false, only = false, forceSegmentId, compareOnly = false, stopBeforeRender = false } = {}) {
     if (!internal && jobs.has(id)) return { ok: false, error: '这个项目正在跑，等它跑完' };
     const job = { id, stage: from ?? 'idea', startedAt: Date.now() };
-    jobs.set(id, job);
+    beginJob(id, job);
     const results = [];
     try {
       let project = await store.load(id);
@@ -1419,7 +1467,7 @@ export function apply(ctx, config = {}) {
       }).catch(() => {});
       return { ok: false, error: error.message, results };
     } finally {
-      jobs.delete(id);
+      endJob(id);
       await store.update(id, (project) => {
         project.running = null;
       }).catch(() => {});
@@ -1430,7 +1478,8 @@ export function apply(ctx, config = {}) {
   function startPipeline(id, optionsForRun) {
     if (jobs.has(id)) return null;
     const controller = new AbortController();
-    jobs.set(id, { id, stage: optionsForRun?.from ?? 'idea', startedAt: Date.now(), controller });
+    // 先登记再进 runPipeline（internal 模式不会重复登记）。
+    beginJob(id, { id, stage: optionsForRun?.from ?? 'idea', startedAt: Date.now(), controller });
     const promise = runPipeline(id, { ...optionsForRun, signal: controller.signal, internal: true }).finally(() => {
       controller.abort();
     });
@@ -1495,6 +1544,7 @@ export function apply(ctx, config = {}) {
         projectDir: projectRoot,
         reviewThreshold: Number(options.reviewThreshold) || 80,
         reviewPolicy: String(options.reviewPolicy ?? 'balanced'),
+        promptsDir,
         maxRework: Number(options.maxRework) || 2,
         aspect: String(options.aspectRatio),
         aspects: ['9:16', '16:9', '1:1', '4:3', '3:4', '21:9'].filter((value) => video.providers().length > 0),
@@ -1515,6 +1565,38 @@ export function apply(ctx, config = {}) {
         voices: VOICE_CATALOG,
         statuses: STAGE_STATUS,
       });
+    },
+
+    /** 提示词模板：列出现有覆盖文件（没写就是内置写法） */
+    async prompts() {
+      const names = ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit', 'reviewer'];
+      const items = names.map((name) => {
+        let content = '';
+        try {
+          const file = join(promptsDir, `${name}.md`);
+          if (existsSync(file)) content = readFileSync(file, 'utf8');
+        } catch {
+          content = '';
+        }
+        return { name, content, custom: Boolean(String(content).trim()) };
+      });
+      return ok({ dir: promptsDir, items });
+    },
+
+    /** 保存或清空某个阶段的提示词覆盖（content 为空 = 恢复默认） */
+    async savePrompt(payload) {
+      const names = ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit', 'reviewer'];
+      const name = String(payload?.name ?? '');
+      if (!names.includes(name)) return fail('bad-request', `未知的模板：${name}`);
+      const content = String(payload?.content ?? '');
+      const file = join(promptsDir, `${name}.md`);
+      if (!content.trim()) {
+        await rm(file, { force: true }).catch(() => {});
+        return ok({ name, cleared: true });
+      }
+      await mkdir(promptsDir, { recursive: true });
+      await writeFile(file, content, 'utf8');
+      return ok({ name, bytes: Buffer.byteLength(content, 'utf8') });
     },
 
     async projects() {

@@ -21,6 +21,9 @@ DeepSeek Harness 插件。把「产品画像 + 实时热点」做成一条能交
 分镜可以**只改一镜或一句台词**：面板里就地编辑，或调 `creative_studio_edit_shot`，
 改完立刻重跑 13 道门、不重新生成整条分镜；改台词会自动同步进认领它的镜头提示词。
 
+每个阶段的指令可以**外置改写**（面板「提示词模板」或 `<dataDir>/prompts/<stage>.md`），
+改完下一阶段生效；配置与任务队列都落盘，宿主重启后卡住的阶段会标成「已中断」并告诉你怎么续跑。
+
 也自带一个**拉片台**：贴抖音链接或本机 mp4，拆出逐镜时间线、联系表、台词、
 制作方式判定（实拍 / AI / 代码渲染）与复刻分镜。
 
@@ -104,8 +107,9 @@ OpenAI 兼容端点。也可以强制 `codex` 或 `http`。
 ## 开发
 
 ```bash
-node test/selftest.mjs      # 门禁 / JSON / 仓库 / ffmpeg 剪辑管线
+node test/selftest.mjs      # 门禁 / JSON / 仓库 / ffmpeg 剪辑管线 / 提示词覆盖
 node test/panel-smoke.mjs   # 面板整棵树渲染（不需要浏览器）
+node test/eval.mjs          # 门禁评测集：17 条好/坏样例回归（改提示词或门禁后跑）
 ```
 
 `tools/` 下是运维脚本（修分镜、重建锁行），不参与运行时。

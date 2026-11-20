@@ -286,6 +286,7 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 | `llmTimeoutMs` / `llmMaxTokens` | 三个 Agent 的单次调用上限与输出预算 |
 | `reviewThreshold` | 审核通过线（0–100），默认 80 |
 | `reviewPolicy` | `balanced`（默认）：门禁过、无 blocker、分数 ≥ 阈值−12 就带建议收下；`strict`：必须审核说 pass 且到阈值 |
+| `promptsDir` | 阶段提示词外置目录，默认 `<dataDir>/prompts`；`<stage>.md` 存在就追加到内置指令后面 |
 | `maxRework` | 单阶段自动重做次数，默认 2 |
 | `aspectRatio` / `resolution` / `videoModel` | 出片默认档位 |
 | `videoProvider` | `auto` / `easyframe` / `mnmx` |

@@ -5,7 +5,7 @@
  * 覆盖：门禁契约（含 shot-contract 真实样例）、分镜切段、JSON 提取、项目仓库、
  * 以及 ffmpeg 剪辑管线（用合成片段跑一遍归一/拼接/混音/抽帧）。
  */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,8 @@ import {
   loadShotContract, segmentsOf, dialogueOf, SIX_DIMENSIONS, patchStoryboard,
 } from '../engine/contracts.js';
 import { extractJson } from '../engine/agents.js';
+import { createAgents } from '../engine/agents.js';
+import { platformOf, checkPlatform, platformBrief } from '../engine/platform.js';
 import { createStore, newProject, event } from '../engine/store.js';
 import { createMedia } from '../engine/media.js';
 
@@ -286,6 +288,68 @@ console.log('\n[9] 分镜局部编辑：改一镜/一句，不重生成整条');
   } else {
     check('改台词同步进提示词（样例没有可对上的台词镜，跳过）', true);
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[10] 平台策略：时长/画幅/响度按平台判，偏好只提示不否决');
+check('平台表取得到抖音', platformOf({ platform: 'douyin' })?.label === '抖音');
+check('未知平台不假装有约束', platformOf({ platform: 'weibo' }) === null);
+check('没填平台按抖音兜底', platformOf({})?.id === 'douyin');
+
+const douyinLandscape = checkPlatform({ platform: 'douyin', aspect: '16:9' });
+check('抖音横版被拦（hard）', douyinLandscape.failures.length > 0 && douyinLandscape.failures[0].includes('横版'), douyinLandscape.failures.join(' / '));
+const douyinLong = checkPlatform({ platform: 'douyin', aspect: '9:16' }, { seconds: 240 });
+check('抖音 240 秒只提示不拦', douyinLong.failures.length === 0 && douyinLong.advisories.some((line) => line.includes('常见区间')), douyinLong.advisories.join(' / '));
+const douyinOverCap = checkPlatform({ platform: 'douyin' }, { seconds: 1000 });
+check('抖音超硬上限被拦', douyinOverCap.failures.some((line) => line.includes('硬上限')), douyinOverCap.failures.join(' / '));
+const douyinNormal = checkPlatform({ platform: 'douyin', aspect: '9:16' }, { seconds: 20 });
+check('抖音 9:16 / 20 秒零提示', douyinNormal.failures.length === 0 && douyinNormal.advisories.length === 0, douyinNormal.advisories.join(' / '));
+const biliPortrait = checkPlatform({ platform: 'bilibili', aspect: '9:16' }, { seconds: 60 });
+check('B站竖版只提示不拦', biliPortrait.failures.length === 0 && biliPortrait.advisories.length > 0);
+
+const samplePlatformGate = gateStoryboard(sample, { platform: 'douyin', targetSeconds: 15 }, shotContract);
+check('真实样例在抖音策略下仍过门', samplePlatformGate.ok, (samplePlatformGate.failures ?? []).slice(0, 2).join(' / '));
+check('门禁结果带上平台与提示数组', samplePlatformGate.platform === 'douyin' && Array.isArray(samplePlatformGate.advisories));
+const badAspectGate = gateStoryboard(sample, { platform: 'douyin', aspect: '16:9', targetSeconds: 15 }, shotContract);
+check('分镜在抖音横版下被拦', !badAspectGate.ok && badAspectGate.failures.some((line) => line.includes('横版')), badAspectGate.failures.slice(0, 2).join(' / '));
+
+const loudEdl = gateEdit({ ...goodEdl, audio: { ...goodEdl.audio, lufs: -25 } }, { render: timedRender, project: { platform: 'douyin', targetSeconds: 13 } });
+check('响度按平台报错且带平台名', !loudEdl.ok && loudEdl.failures.some((line) => line.includes('抖音')), loudEdl.failures.join(' / '));
+check('平台合规的响度过门', gateEdit(goodEdl, { render: timedRender, project: { platform: 'douyin', targetSeconds: 13 } }).ok);
+const biliLoud = gateEdit({ ...goodEdl, audio: { ...goodEdl.audio, lufs: -17 } }, { render: timedRender, project: { platform: 'bilibili', targetSeconds: 13 } });
+check('B站响度区间更宽', biliLoud.ok, biliLoud.failures.join(' / '));
+check('提示词带上平台常见时长', platformBrief({ platform: 'douyin', aspect: '9:16', targetSeconds: 45 }).includes('常见 15–90 秒'));
+
+// ---------------------------------------------------------------------------
+console.log('\n[10] 提示词外置覆盖');
+{
+  const dir = await mkdtemp(join(tmpdir(), 'cs-prompts-'));
+  await writeFile(join(dir, 'story.md'), '这是自定义剧情要求：必须出现一只猫。', 'utf8');
+  let captured = '';
+  const agents = createAgents({
+    callModel: async ({ user }) => {
+      captured = user;
+      return '{"title":"t","logline":"l","premise":"p","punchline":"q","characters":[],"acts":[],"ending":"e"}';
+    },
+    config: { promptsDir: dir },
+  });
+  await agents.produce({
+    stage: 'story',
+    project: { title: '测试', targetSeconds: 30, brief: { productName: '面' } },
+    context: {},
+  });
+  check('自定义阶段指令进了提示词', captured.includes('这是自定义剧情要求'));
+  let plain = '';
+  const bare = createAgents({
+    callModel: async ({ user }) => {
+      plain = user;
+      return '{"title":"t"}';
+    },
+    config: {},
+  });
+  await bare.produce({ stage: 'story', project: { title: '测试', targetSeconds: 30, brief: {} }, context: {} });
+  check('没有覆盖文件时不出现自定义段落', !plain.includes('自定义阶段指令（story.md）'));
+  await rm(dir, { recursive: true, force: true });
 }
 
 console.log(`\n结果：${pass} 通过，${failed} 失败`);

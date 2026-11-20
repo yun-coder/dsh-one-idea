@@ -7,7 +7,10 @@
  *
  * 打回重做时，上一轮的门禁失败项与审核意见会逐条塞回生产 Agent 的提示词里。
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { SIX_DIMENSIONS, VOICE_CATALOG, dialogueOf, segmentsOf } from './contracts.js';
+import { platformBrief } from './platform.js';
 
 const MAX_SEGMENT_SECONDS = 15;
 const MIN_SEGMENT_SECONDS = 5;
@@ -43,7 +46,7 @@ export function extractJson(raw) {
 const briefBlock = (project) => {
   const brief = project?.brief ?? {};
   const lines = [
-    `项目：${project?.title ?? ''}（${project?.platform ?? 'douyin'} / 目标 ${project?.targetSeconds ?? 45} 秒 / 画幅 ${project?.aspect ?? '9:16'}）`,
+    `项目：${project?.title ?? ''}（${platformBrief(project)}）`,
     `${brief.projectMode === 'story' ? '作品名' : '产品名'}：${brief.productName || '（未填）'}`,
     brief.projectMode === 'story' ? '项目类型：剧情短片，围绕角色目标和动作冲突构思，成片不要求有销售对象。' : '',
     `品类：${brief.category || '（未填）'}`,
@@ -365,6 +368,22 @@ const REVIEW_FOCUS = {
 };
 
 export function createAgents({ callModel, config = {} }) {
+  /**
+   * 阶段指令可外置：<promptsDir>/<stage>.md 存在时替换内置任务描述（idea/story/storyboard/characters/voice/edit），
+   * reviewer.md 追加到审核重点后面。每次都读文件，改完下一阶段就生效。
+   */
+  const promptOverride = (name) => {
+    const dir = config?.promptsDir;
+    if (!dir) return '';
+    try {
+      const file = join(dir, `${name}.md`);
+      if (!existsSync(file)) return '';
+      const text = readFileSync(file, 'utf8').trim();
+      return text ? `## 自定义阶段指令（${name}.md）\n${text}` : '';
+    } catch {
+      return '';
+    }
+  };
   const maxTokens = Number(config.llmMaxTokens) || 8000;
 
   /** 一次「要 JSON」的调用：解析失败带错误重问；传输类故障退避重试一次。 */
@@ -408,6 +427,9 @@ export function createAgents({ callModel, config = {} }) {
         priorBlock(context),
         '',
         task(project),
+        promptOverride(stage)
+          ? `${promptOverride(stage)}\n（与上面的默认写法冲突时以这一段为准；但 JSON 结构与门禁要求不能破）`
+          : '',
         project?.brief?.audioMode === 'no-dialogue'
           ? '本片为无对白模式：用动作和环境声交代前提、转折和结尾。punchline 是结尾动作，原文纳入 ending。所有分镜节拍使用 action，提示词只写非语言音效，配音清单 lines 与 characters 留空。'
           : '',
@@ -480,6 +502,7 @@ export function createAgents({ callModel, config = {} }) {
         '- 标题 ≤ 20 字且带具体利益点；hashtags 至少 2 个。',
         '- 每段的 reason 一句话，说清剪辑判断，不要写「衔接自然」。',
         issuesBlock(issues),
+        promptOverride('edit') ? `${promptOverride('edit')}\n（与上面规则冲突时以这一段为准；时长与顺序的硬约束不能破）` : '',
       ].join('\n');
       const edl = await askJson({
         system: EDITOR_IDENTITY,
@@ -665,16 +688,24 @@ export function createAgents({ callModel, config = {} }) {
         `审核对象：${STAGE_LABEL[stage] ?? stage}（第 ${attempt} 版）`,
         '本次审核范围：只看下面这一份产物。它不含别的阶段的内容是正常的——缺分镜、缺台词、缺时长都不算问题，不要因此扣分。',
         `本阶段审核重点：${focus}`,
+        promptOverride('reviewer') ? `额外审核要求：\n${promptOverride('reviewer').replace(/^## 自定义阶段指令（reviewer\.md）\n/, '')}` : '',
         project?.brief?.audioMode === 'no-dialogue'
           ? '本项目没有对白。检查前提和落点是否通过画面动作清楚交代，声音设计以环境声和动作音效为主。'
           : '',
-        `项目：${project?.title ?? ''}｜目标 ${project?.targetSeconds ?? 45} 秒｜平台 ${project?.platform ?? 'douyin'}`,
+        `项目：${project?.title ?? ''}｜目标 ${project?.targetSeconds ?? 45} 秒｜${platformBrief(project)}`,
         referenceMode
           ? '本项目是**复刻模式**：创意依据是参考片的拆解报告，不是热点清单。hotspotLinks 为空不算问题；但每条方向必须有 borrowedFrom（借了参考片哪段结构）和 swapped（换掉了什么），缺这两个才是问题。'
           : '',
         '',
         '确定性质量门结果（这部分不是建议，是事实）：',
         gate?.ok ? '全部通过。' : (gate?.failures ?? []).map((failure, index) => `${index + 1}. ${failure}`).join('\n'),
+        ...(Array.isArray(gate?.advisories) && gate.advisories.length > 0
+          ? [
+            '',
+            '平台适配提示（不构成不通过，不要因此扣分；如果确实影响这个平台的表现，可以写进 issues 的 minor）：',
+            ...gate.advisories.map((advisory) => `· ${advisory}`),
+          ]
+          : []),
         '',
         '待审产物：',
         JSON.stringify(artifact, null, 2).slice(0, 24000),

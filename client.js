@@ -173,6 +173,14 @@ window.__ModuleLoader__.load({
       shotLine: '这一镜的台词',
       shotEditSaved: '已保存，门禁已重跑',
       passedWithNotes: '带建议通过',
+      promptTab: '提示词模板',
+      promptHint: '每一段的指令可以改：保存后会追加到内置阶段指令后面，冲突时以这里为准；JSON 结构与门禁要求不能被改掉。留空保存 = 恢复默认。',
+      promptName: '阶段',
+      promptSave: '保存',
+      promptReset: '恢复默认',
+      promptSaved: '已保存，下一阶段生效',
+      promptResetDone: '已恢复默认',
+      promptPlaceholder: '例如：分镜里每一镜的动作必须是一个瞬间，不要写「然后」「接着」；台词只用画外音，不要出现手机屏幕字幕。',
       refRun: '拉片并拆解',
       refRunning: '拉片中',
       refDone: '已拆解',
@@ -366,6 +374,14 @@ window.__ModuleLoader__.load({
       shotLine: 'Line in this shot',
       shotEditSaved: 'Saved; gates re-ran',
       passedWithNotes: 'Passed with notes',
+      promptTab: 'Prompt templates',
+      promptHint: 'Each stage instruction can be extended: saved text is appended to the built-in instruction and wins on conflict; JSON structure and gates stay mandatory. Save empty to restore defaults.',
+      promptName: 'Stage',
+      promptSave: 'Save',
+      promptReset: 'Restore default',
+      promptSaved: 'Saved; applies to the next run',
+      promptResetDone: 'Restored defaults',
+      promptPlaceholder: 'Example: every shot action must be a single instant; no "then"/"after that"; dialogue only as voice-over.',
       refRun: 'Tear down',
       refRunning: 'Tearing down',
       refDone: 'Torn down',
@@ -410,7 +426,7 @@ window.__ModuleLoader__.load({
     const AGENT_LABEL = { producer: '生产 Agent', editor: '剪辑团队 Agent', reviewer: '审核 Agent' };
     const STATUS_LABEL = {
       empty: '未开始', running: '进行中', done: '已完成', rework: '打回重做中',
-      needs_review: '待人工复核', failed: '失败', skipped: '已跳过',
+      needs_review: '待人工复核', failed: '失败', skipped: '已跳过', interrupted: '已中断',
     };
 
     async function call(endpoint, payload) {
@@ -527,7 +543,7 @@ window.__ModuleLoader__.load({
     };
 
     const TONE = {
-      empty: 'dim', running: 'warn', rework: 'warn', needs_review: 'bad', failed: 'bad', done: 'good', skipped: 'dim',
+      empty: 'dim', running: 'warn', rework: 'warn', needs_review: 'bad', failed: 'bad', done: 'good', skipped: 'dim', interrupted: 'warn',
     };
     const TONE_STYLE = {
       dim: { color: 'var(--dsw-alias-label-secondary)', borderColor: 'var(--dsw-alias-border-l3)' },
@@ -1807,6 +1823,67 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // 提示词模板
+    // ---------------------------------------------------------------------
+    function PromptsEditor({ t }) {
+      const names = ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit', 'reviewer'];
+      const [items, setItems] = useState([]);
+      const [name, setName] = useState('story');
+      const [text, setText] = useState('');
+      const [notice, setNotice] = useState('');
+      const [busy, setBusy] = useState(false);
+      useEffect(() => {
+        void (async () => {
+          try {
+            const result = await call('prompts', {});
+            setItems(result?.items ?? []);
+          } catch (error) {
+            setNotice(`读取失败：${error.message ?? error}`);
+          }
+        })();
+      }, []);
+      useEffect(() => {
+        const item = items.find((row) => row.name === name);
+        setText(item?.content ?? '');
+      }, [items, name]);
+      const save = async (content) => {
+        setBusy(true);
+        try {
+          await call('savePrompt', { name, content });
+          const result = await call('prompts', {});
+          setItems(result?.items ?? []);
+          setNotice(content.trim() ? t('promptSaved') : t('promptResetDone'));
+        } catch (error) {
+          setNotice(`保存失败：${error.message ?? error}`);
+        } finally {
+          setBusy(false);
+        }
+      };
+      return h('section', { style: s.card },
+        h('h3', { style: { margin: 0, fontSize: '16px' } }, t('promptTab')),
+        h('p', { style: s.meta }, t('promptHint')),
+        h('div', { style: s.row },
+          h('span', { style: s.label }, t('promptName')),
+          h('select', {
+            style: { ...s.input, width: '200px' },
+            value: name,
+            onChange: (event) => setName(event.target.value),
+          }, ...names.map((key) => h('option', { key, value: key }, `${key}${items.find((row) => row.name === key)?.custom ? ' · 已自定义' : ''}`))),
+          h('div', { style: s.spacer }),
+          h('button', { type: 'button', style: { ...s.btn, ...(busy ? s.disabled : {}) }, disabled: busy, onClick: () => void save(text) }, t('promptSave')),
+          h('button', { type: 'button', style: { ...s.btnGhost, ...(busy ? s.disabled : {}) }, disabled: busy, onClick: () => void save('') }, t('promptReset')),
+        ),
+        notice ? h('p', { style: { ...s.meta, fontSize: '12px' } }, notice) : null,
+        h('textarea', {
+          style: { ...s.textarea, minHeight: '260px', fontFamily: MONO },
+          value: text,
+          placeholder: t('promptPlaceholder'),
+          onChange: (event) => setText(event.target.value),
+        }),
+      );
+    }
+
+    // ---------------------------------------------------------------------
     // 主面板
     // ---------------------------------------------------------------------
     function Panel({ t, host }) {
@@ -2117,6 +2194,7 @@ window.__ModuleLoader__.load({
           ...[
             ['production', t('pipeline')],
             ...(project ? [['review', t('reviewDesk')], ['brief', t('projectBriefTab')]] : []),
+            ['prompts', t('promptTab')],
             ['library', t('referenceLibraryTab')],
           ].map(([key, label]) => h('button', {
             key,
@@ -2126,7 +2204,9 @@ window.__ModuleLoader__.load({
             onClick: () => setWorkspaceTab(key),
           }, label)),
         ),
-        workspaceTab === 'library'
+        workspaceTab === 'prompts'
+          ? h(PromptsEditor, { t })
+          : workspaceTab === 'library'
           ? h(ReferenceStudio, {
             t,
             onOpenProject: async (newId) => {
