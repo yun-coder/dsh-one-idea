@@ -26,6 +26,7 @@
     "client.js",
     "engine",
     "tools",
+    "demo",
     "cordis.patch.yml",
     "locale/*.json",
     "docs",
@@ -33,6 +34,7 @@
     "README.md",
     "LICENSE",
     "NOTICE",
+    "machine.json.example",
     "test"
   ],
   "engines": {

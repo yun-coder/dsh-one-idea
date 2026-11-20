@@ -13,7 +13,8 @@
  */
 import { mkdir, copyFile, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
@@ -32,6 +33,7 @@ import {
 import { createAgents, extractJson } from './engine/agents.js';
 import { loadMachineOverrides, resolveConfig } from './engine/config.js';
 import { runDoctor } from './engine/doctor.js';
+import { materializeDemo } from './engine/demo.js';
 import { createReference } from './engine/reference.js';
 import { detectBurnedCaptions } from './engine/burned-captions.js';
 import { matchesStamp, promptLayerFingerprint } from './engine/fingerprint.js';
@@ -43,6 +45,8 @@ import { createOpenFilmFinisher } from './engine/openfilm.js';
 const API_PREFIX = '/creative-studio/api';
 const FILE_ROUTE = '/creative-studio/file';
 const BODY_LIMIT = 4 * 1024 * 1024;
+/** 包根目录：示例项目与包内资源都相对它找。 */
+const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
 /**
  * 清洗用户贴进来的输入：浏览器/微信复制时常带首尾引号、书名号、空白甚至换行。
@@ -1646,6 +1650,37 @@ export function apply(ctx, config = {}) {
       event(project, { kind: 'create', text: '项目已创建' });
       await store.save(project);
       return ok({ id: project.id, project });
+    },
+
+    /** 载入示例项目：把 demo 的媒体复制到项目目录，替换占位路径后存成一条完成的项目。 */
+    async createDemo() {
+      const demoDir = join(PKG_ROOT, 'demo');
+      const templateFile = join(demoDir, 'project.template.json');
+      if (!existsSync(templateFile)) return fail('not-ready', '示例项目缺失：包里没有 demo/project.template.json');
+      const template = JSON.parse(await readFile(templateFile, 'utf8'));
+      const project = newProject({
+        title: template.title,
+        platform: template.platform,
+        targetSeconds: template.targetSeconds,
+        aspect: template.aspect,
+        resolution: template.resolution,
+        brief: template.brief,
+      });
+      const dir = store.dirOf(project.id);
+      const { template: filled } = await materializeDemo({ demoDir, dir });
+      project.brief = { ...project.brief, ...filled.brief };
+      project.chosenIdea = filled.chosenIdea;
+      project.stages = filled.stages;
+      project.finalFile = filled.finalFile;
+      project.coverFile = filled.coverFile;
+      project.demo = filled.demo;
+      event(project, { kind: 'demo', text: '示例项目已载入：可以直接看成片，也可以从任意阶段重跑' });
+      await store.save(project);
+      for (const stage of ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit']) {
+        const artifact = filled.stages?.[stage]?.artifact;
+        if (artifact) await store.writeArtifact(project, stage, artifact).catch(() => {});
+      }
+      return ok({ id: project.id, dir });
     },
 
     async state(payload) {

@@ -47,6 +47,9 @@ dsh ... # 或直接在包目录
 npm run doctor
 ```
 
+第一次用可以点 **「载入示例项目」**：会带出一条 10 秒成品示例（两个镜头、已剪好、可直接播放），
+从任意阶段重跑都行——先看结果，再看过程。
+
 ### 可选依赖（缺了会降级，不会崩）
 
 | 组件 | 用途 | 没装时 |
@@ -89,6 +92,8 @@ OpenAI 兼容端点。也可以强制 `codex` 或 `http`。
   "reaVideoCmd": "D:\\tools\\rea-video\\.venv\\Scripts\\rea-video.exe"
 }
 ```
+
+包里带了一份可直接复制的模板：[machine.json.example](machine.json.example)。
 
 对应的环境变量：`EASYFRAME_API_KEY`、`MNMX_CARD_KEY`、`IMAGE_API_KEY`、
 `FFMPEG_PATH`、`CREATIVE_STUDIO_DATA`、`CREATIVE_STUDIO_PROJECTS`。

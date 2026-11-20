@@ -8,6 +8,8 @@
 ```
 D:\智贸\10-创意工作台\
   app\                       插件源码（通过 link 安装到 DSH profile）
+    demo\                    示例项目模板与 10 秒成片（面板「载入示例项目」用）
+    machine.json.example     本机配置模板（复制到 ~/.dsh/creative-studio/machine.json）
   projects\                  项目产物：一条项目一个子目录
   data\                      独立出片任务索引 + 生图（h3_* 工具、拉片台共用）
   tools\rea-video\           拉片引擎（git clone + .venv）

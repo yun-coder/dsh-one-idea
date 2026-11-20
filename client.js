@@ -178,6 +178,8 @@ window.__ModuleLoader__.load({
       doctorHint: '装完先跑一遍：Node、目录、ffmpeg、分镜技能、出片密钥、生图后端，缺什么怎么补都会列出来。',
       doctorRun: '运行自检',
       doctorRunning: '检查中…',
+      demoButton: '载入示例项目',
+      demoLoaded: '示例项目已载入：可以直接看成片，也可以从任意阶段重跑',
       promptHint: '每一段的指令可以改：保存后会追加到内置阶段指令后面，冲突时以这里为准；JSON 结构与门禁要求不能被改掉。留空保存 = 恢复默认。',
       promptName: '阶段',
       promptSave: '保存',
@@ -383,6 +385,8 @@ window.__ModuleLoader__.load({
       doctorHint: 'Run once after install: Node, folders, ffmpeg, storyboard skill, render keys and image backend, each with a fix hint.',
       doctorRun: 'Run check',
       doctorRunning: 'Checking…',
+      demoButton: 'Load demo project',
+      demoLoaded: 'Demo loaded: watch the film, or rerun any stage',
       promptHint: 'Each stage instruction can be extended: saved text is appended to the built-in instruction and wins on conflict; JSON structure and gates stay mandatory. Save empty to restore defaults.',
       promptName: 'Stage',
       promptSave: 'Save',
@@ -593,7 +597,7 @@ window.__ModuleLoader__.load({
       forbidden: '', extra: '', audioMode: 'dialogue', projectMode: 'promotion', targetSeconds: '45', platform: 'douyin', aspect: '9:16',
     });
 
-    function NewProject({ t, config, onCreate, busy }) {
+    function NewProject({ t, config, onCreate, onDemo, busy }) {
       const [form, setForm] = useState(emptyForm);
       const set = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
       const submit = (startNow) => onCreate(form, startNow);
@@ -601,6 +605,8 @@ window.__ModuleLoader__.load({
       return h('div', { style: s.card },
         h('div', { style: s.row },
           h('strong', { style: { fontSize: '13px' } }, t('emptyTitle')),
+          h('div', { style: s.spacer }),
+          onDemo ? h('button', { type: 'button', style: { ...s.btnGhost, ...(busy ? s.disabled : {}) }, disabled: busy, onClick: () => onDemo() }, t('demoButton')) : null,
         ),
         h('p', { style: s.meta }, t('emptyBody')),
         h('div', { style: s.grid },
@@ -2113,6 +2119,14 @@ window.__ModuleLoader__.load({
         setNotice(startNow ? '已开跑：创意 → 剧情 → 分镜 → 人物 → 配音。确认分段清单后出片。' : '');
       });
 
+      const loadDemo = () => guard(async () => {
+        const created = await call('createDemo', {});
+        remember(created.id);
+        await loadProjects(created.id);
+        setWorkspaceTab('production');
+        setNotice(t('demoLoaded'));
+      });
+
       const removeProject = () => guard(async () => {
         if (!selected) return;
         if (!window.confirm(t('removeConfirm'))) return;
@@ -2270,7 +2284,7 @@ window.__ModuleLoader__.load({
             },
           })
           : !project
-            ? h(NewProject, { t, config, onCreate: create, busy })
+            ? h(NewProject, { t, config, onCreate: create, onDemo: loadDemo, busy })
             : workspaceTab === 'brief'
               ? h(React.Fragment, null,
                 h(ReferenceCard, { key: project.id, t, project, config, onRun: runReference }),

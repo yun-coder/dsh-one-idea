@@ -1,0 +1,19 @@
+{
+  "_readme": "复制这份文件到 ~/.dsh/creative-studio/machine.json，按需填写。留空的项会自动回落到环境变量或默认值；密钥不要提交进任何仓库。",
+  "dataDir": "",
+  "projectDir": "",
+  "easyframeApiKey": "",
+  "mnmxCardKey": "",
+  "videoProvider": "auto",
+  "imageBackend": "auto",
+  "codexCmd": "",
+  "imageBaseUrl": "http://127.0.0.1:38650/v1",
+  "imageKey": "",
+  "ffmpegPath": "",
+  "bgmDir": "",
+  "skillDir": "",
+  "scriptsDir": "",
+  "reaVideoCmd": "",
+  "openfilmCmd": "",
+  "reviewPolicy": "balanced"
+}

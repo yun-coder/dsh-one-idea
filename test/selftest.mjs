@@ -8,7 +8,8 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   GATES,
@@ -19,6 +20,7 @@ import { extractJson } from '../engine/agents.js';
 import { createAgents } from '../engine/agents.js';
 import { resolveConfig } from '../engine/config.js';
 import { runDoctor } from '../engine/doctor.js';
+import { materializeDemo } from '../engine/demo.js';
 import { platformOf, checkPlatform, platformBrief } from '../engine/platform.js';
 import { glyphFraction, overlapScore, verdictOf, sampleTimes, detectBurnedCaptions } from '../engine/burned-captions.js';
 import { matchesStamp, promptLayerFingerprint } from '../engine/fingerprint.js';
@@ -430,6 +432,19 @@ console.log('\n[11] 环境自检');
   const report = runDoctor(resolved);
   check('doctor 找出缺 shot-contract', report.items.some((item) => item.status === 'fail' && item.name.includes('shot-contract')));
   check('doctor 汇总可信', report.summary.ok > 0 && report.summary.fail >= 1 && report.ok === false);
+  await rm(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[12] 示例项目');
+{
+  const demoDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'demo');
+  const dir = await mkdtemp(join(tmpdir(), 'cs-demo-'));
+  const { template } = await materializeDemo({ demoDir, dir });
+  check('示例成片已复制', existsSync(template.finalFile), template.finalFile);
+  check('分段路径已替换', template.stages.render.artifact.tasks.every((task) => existsSync(task.file)));
+  check('没有残留占位符', !JSON.stringify(template).includes('__SEG_') && !JSON.stringify(template).includes('__FINAL__'));
+  check('示例成片有内容', (await readFile(template.finalFile)).length > 100 * 1024);
   await rm(dir, { recursive: true, force: true });
 }
 
