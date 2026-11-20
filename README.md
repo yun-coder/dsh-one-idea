@@ -121,9 +121,11 @@ OpenAI 兼容端点。也可以强制 `codex` 或 `http`。
 ```bash
 node test/doctor.mjs        # 环境自检：Node/目录/ffmpeg/分镜技能/密钥/生图后端，缺什么给修复提示
 node test/selftest.mjs      # 门禁 / JSON / 仓库 / ffmpeg 剪辑管线 / 提示词覆盖
-node test/panel-smoke.mjs   # 面板整棵树渲染（不需要浏览器）
+node test/panel-smoke.mjs   # 面板整棵树渲染 + 中英文案一一对应（不需要浏览器）
 node test/eval.mjs          # 门禁评测集：17 条好/坏样例回归（改提示词或门禁后跑）
 ```
+
+界面中英双语：`npm run i18n` 可以查两个语言包里有没有漏翻的键。
 
 `tools/` 下是运维脚本（修分镜、重建锁行），不参与运行时。
 

@@ -180,6 +180,45 @@ window.__ModuleLoader__.load({
       doctorRunning: '检查中…',
       demoButton: '载入示例项目',
       demoLoaded: '示例项目已载入：可以直接看成片，也可以从任意阶段重跑',
+      agentProducer: '生产 Agent',
+      agentEditor: '剪辑团队 Agent',
+      agentReviewer: '审核 Agent',
+      status_empty: '未开始',
+      status_running: '进行中',
+      status_done: '已完成',
+      status_rework: '打回重做中',
+      status_needs_review: '待人工复核',
+      status_failed: '失败',
+      status_skipped: '已跳过',
+      status_interrupted: '已中断',
+      errNoJson: '宿主没有返回 JSON（HTTP {n}）',
+      errRequest: '请求失败（HTTP {n}）',
+      phTitle: '清汤面 · 深夜面馆 45 秒',
+      phTone: '克制的温情，不要叫卖',
+      phPoints: '一碗面一碗汤\n凌晨十二点还开门\n老板记得每个老客的口味',
+      phForbidden: '最,第一,国家级',
+      unitShots: '{n} 镜',
+      unitSegment: '{m} 段',
+      noticeProjectOpened: '已开项目：{id}',
+      labelOneLiner: '一句话',
+      scoreLine: '钩子 {hook} · 契合 {fit} · 可拍 {feasible}',
+      labelEnding: '结局：{text}',
+      noticeSaveFailed: '保存失败：{msg}',
+      noticeReadFailed: '读取失败：{msg}',
+      storyboardMeta: '{d}s · {n} 镜 · {m} 段',
+      labelPrompt: '提示词',
+      labelNarration: '旁白：{voice} · {emotion}',
+      trimHead: '裁头 {n}s',
+      trimTail: '裁尾 {n}s',
+      doctorSummary: '{ok} 通过 · {warn} 提醒 · {fail} 失败',
+      customSuffix: ' · 已自定义',
+      notifyTitle: '创意工作台需要复核：{title}',
+      noticeStarted: '已开跑：创意 → 剧情 → 分镜 → 人物 → 配音。确认分段清单后出片。',
+      noticeHotspots: '抓到 {n} 条热点',
+      sourceManual: '手动',
+      projectCount: '{n} 个项目',
+      reaVisionLine: '{a}/{b} 镜已复核',
+      shotsSegments: '{n} 镜 / {m} 段',
       promptHint: '每一段的指令可以改：保存后会追加到内置阶段指令后面，冲突时以这里为准；JSON 结构与门禁要求不能被改掉。留空保存 = 恢复默认。',
       promptName: '阶段',
       promptSave: '保存',
@@ -387,6 +426,45 @@ window.__ModuleLoader__.load({
       doctorRunning: 'Checking…',
       demoButton: 'Load demo project',
       demoLoaded: 'Demo loaded: watch the film, or rerun any stage',
+      agentProducer: 'Production agent',
+      agentEditor: 'Edit team agent',
+      agentReviewer: 'Reviewer',
+      status_empty: 'Not started',
+      status_running: 'Running',
+      status_done: 'Done',
+      status_rework: 'Reworking',
+      status_needs_review: 'Needs review',
+      status_failed: 'Failed',
+      status_skipped: 'Skipped',
+      status_interrupted: 'Interrupted',
+      errNoJson: 'Host did not return JSON (HTTP {n})',
+      errRequest: 'Request failed (HTTP {n})',
+      phTitle: 'Clear-soup noodles · late-night shop, 45s',
+      phTone: 'Restrained warmth, no hard sell',
+      phPoints: 'One bowl, one soup\nOpen at midnight\nThe owner remembers regulars',
+      phForbidden: 'best, No.1, national-level',
+      unitShots: '{n} shots',
+      unitSegment: '{m} segs',
+      noticeProjectOpened: 'Project opened: {id}',
+      labelOneLiner: 'One-liner',
+      scoreLine: 'Hook {hook} · Fit {fit} · Feasible {feasible}',
+      labelEnding: 'Ending: {text}',
+      noticeSaveFailed: 'Save failed: {msg}',
+      noticeReadFailed: 'Read failed: {msg}',
+      storyboardMeta: '{d}s · {n} shots · {m} segs',
+      labelPrompt: 'Prompt',
+      labelNarration: 'Voice-over: {voice} · {emotion}',
+      trimHead: 'trim in {n}s',
+      trimTail: 'trim out {n}s',
+      doctorSummary: '{ok} passed · {warn} warnings · {fail} failed',
+      customSuffix: ' · custom',
+      notifyTitle: 'Creative Studio needs review: {title}',
+      noticeStarted: 'Started: idea → story → storyboard → characters → voice. Confirm the segment plan, then render.',
+      noticeHotspots: 'Found {n} hotspots',
+      sourceManual: 'manual',
+      projectCount: '{n} projects',
+      reaVisionLine: '{a}/{b} shots reviewed',
+      shotsSegments: '{n} shots / {m} segs',
       promptHint: 'Each stage instruction can be extended: saved text is appended to the built-in instruction and wins on conflict; JSON structure and gates stay mandatory. Save empty to restore defaults.',
       promptName: 'Stage',
       promptSave: 'Save',
@@ -434,12 +512,11 @@ window.__ModuleLoader__.load({
 
     const fill = (template, vars = {}) => String(template).replace(/\{(\w+)\}/g, (_, key) => (vars[key] === undefined ? '' : String(vars[key])));
 
-    /** 角色与状态用固定标签：locale 里只放字符串，避免依赖嵌套对象的取值行为。 */
-    const AGENT_LABEL = { producer: '生产 Agent', editor: '剪辑团队 Agent', reviewer: '审核 Agent' };
-    const STATUS_LABEL = {
-      empty: '未开始', running: '进行中', done: '已完成', rework: '打回重做中',
-      needs_review: '待人工复核', failed: '失败', skipped: '已跳过', interrupted: '已中断',
-    };
+    /** 角色与状态都走 t()，中英切换一致。 */
+    const agentLabel = (t, agent) => (agent === 'producer' ? t('agentProducer') : agent === 'editor' ? t('agentEditor') : agent === 'reviewer' ? t('agentReviewer') : agent);
+    const statusLabel = (t, status) => t(`status_${status}`);
+    /** 非组件函数（call）的文案：Panel 挂载时把 t 注入进来。 */
+    let text = (key, vars) => fill(key, vars);
 
     async function call(endpoint, payload) {
       const response = await fetch(`${API}/${endpoint}`, {
@@ -451,9 +528,9 @@ window.__ModuleLoader__.load({
       try {
         body = await response.json();
       } catch {
-        throw new Error(`宿主没有返回 JSON（HTTP ${response.status}）`);
+        throw new Error(text('errNoJson', { n: response.status }));
       }
-      if (!body || body.ok !== true) throw new Error(body?.error?.message ?? `请求失败（HTTP ${response.status}）`);
+      if (!body || body.ok !== true) throw new Error(body?.error?.message ?? text('errRequest', { n: response.status }));
       return body.value;
     }
 
@@ -610,17 +687,17 @@ window.__ModuleLoader__.load({
         ),
         h('p', { style: s.meta }, t('emptyBody')),
         h('div', { style: s.grid },
-          h(Field, { label: t('titleField') }, h('input', { style: s.input, value: form.title, onChange: set('title'), placeholder: '清汤面 · 深夜面馆 45 秒' })),
+          h(Field, { label: t('titleField') }, h('input', { style: s.input, value: form.title, onChange: set('title'), placeholder: t('phTitle') })),
           h(Field, { label: t('productName') }, h('input', { style: s.input, value: form.productName, onChange: set('productName') })),
           h(Field, { label: t('category') }, h('input', { style: s.input, value: form.category, onChange: set('category') })),
           h(Field, { label: t('audience') }, h('input', { style: s.input, value: form.audience, onChange: set('audience') })),
-          h(Field, { label: t('tone') }, h('input', { style: s.input, value: form.tone, onChange: set('tone'), placeholder: '克制的温情，不要叫卖' })),
+          h(Field, { label: t('tone') }, h('input', { style: s.input, value: form.tone, onChange: set('tone'), placeholder: t('phTone') })),
           h(Field, { label: t('priceBand') }, h('input', { style: s.input, value: form.priceBand, onChange: set('priceBand') })),
         ),
         h(Field, { label: t('sellingPoints') },
-          h('textarea', { style: s.textarea, value: form.sellingPoints, onChange: set('sellingPoints'), placeholder: '一碗面一碗汤\n凌晨十二点还开门\n老板记得每个老客的口味' }),
+          h('textarea', { style: s.textarea, value: form.sellingPoints, onChange: set('sellingPoints'), placeholder: t('phPoints') }),
         ),
-        h(Field, { label: t('forbidden') }, h('input', { style: s.input, value: form.forbidden, onChange: set('forbidden'), placeholder: '最,第一,国家级' })),
+        h(Field, { label: t('forbidden') }, h('input', { style: s.input, value: form.forbidden, onChange: set('forbidden'), placeholder: t('phForbidden') })),
         h(Field, { label: t('extra') }, h('textarea', { style: { ...s.textarea, minHeight: '42px' }, value: form.extra, onChange: set('extra') })),
         h('div', { style: s.row },
           h(Field, { label: t('targetSeconds') }, h('input', { style: { ...s.input, width: '100px' }, type: 'number', min: 10, max: 180, value: form.targetSeconds, onChange: set('targetSeconds') })),
@@ -772,7 +849,7 @@ window.__ModuleLoader__.load({
         h('div', { style: s.row },
           h('span', { style: s.sectionTitle }, t('refTitle')),
           ref?.summary
-            ? h('span', { style: s.meta }, `${ref.summary.title || ''}${ref.summary.uploader ? ` · ${ref.summary.uploader}` : ''} · ${ref.shotCount ?? ref.summary.shotCount ?? '?'} 镜 · ${ref.duration ?? ref.summary.duration ?? '?'}s`)
+            ? h('span', { style: s.meta }, `${ref.summary.title || ''}${ref.summary.uploader ? ` · ${ref.summary.uploader}` : ''} · ${fill(t('unitShots'), { n: ref.shotCount ?? ref.summary.shotCount ?? '?' })} · ${ref.duration ?? ref.summary.duration ?? '?'}s`)
             : null,
           h('div', { style: s.spacer }),
           ref?.status
@@ -916,7 +993,7 @@ window.__ModuleLoader__.load({
       const toProject = () => guard(async () => {
         if (!id || !productName.trim()) return;
         const created = await call('referenceToProject', { id, productName: productName.trim() });
-        setNotice(`已开项目：${created.id}`);
+        setNotice(fill(t('noticeProjectOpened'), { id: created.id }));
         onOpenProject(created.id);
       });
 
@@ -967,7 +1044,7 @@ window.__ModuleLoader__.load({
           ev
             ? h(React.Fragment, null,
               h('div', { style: s.row },
-                summary ? h('span', { style: s.meta }, `${summary.title || '—'}${summary.uploader ? ` · ${summary.uploader}` : ''} · ${summary.shotCount ?? ev.frames?.length ?? '?'} 镜 · ${summary.duration ?? '?'}s`) : null,
+                summary ? h('span', { style: s.meta }, `${summary.title || '—'}${summary.uploader ? ` · ${summary.uploader}` : ''} · ${fill(t('unitShots'), { n: summary.shotCount ?? ev.frames?.length ?? '?' })} · ${summary.duration ?? '?'}s`) : null,
                 Badge({
                   tone: running ? 'warn' : ev.status === 'failed' ? 'bad' : ev.status === 'done' ? 'good' : 'dim',
                   children: running ? `${t('refRunning')} · ${ev.stage ?? ''}` : ev.status === 'done' ? t('refDone') : ev.status === 'failed' ? t('refFailed') : ev.status,
@@ -1015,7 +1092,7 @@ window.__ModuleLoader__.load({
                     ),
                     h('p', { style: s.meta }, t('reaHint')),
                     ev.rea.vision
-                      ? h('p', { style: s.meta }, `${t('reaVision')}：${ev.rea.vision.reviewed}/${ev.rea.vision.total} 镜`)
+                      ? h('p', { style: s.meta }, `${t('reaVision')}：${fill(t('reaVisionLine'), { a: ev.rea.vision.reviewed, b: ev.rea.vision.total })}`)
                       : null,
                     ev.rea.visionError ? h('p', { style: s.warnText }, `${t('reaVisionFailed')}：${ev.rea.visionError}`) : null,
                     h('pre', { style: { ...s.pre, maxHeight: '240px' } }, ev.rea.summary || ''),
@@ -1047,7 +1124,7 @@ window.__ModuleLoader__.load({
                   ev.replicateSummary
                     ? Badge({ tone: ev.replicateSummary.gate?.ok ? 'good' : 'warn', children: ev.replicateSummary.gate?.ok ? t('refGateOk') : fill(t('refGateFail'), { n: (ev.replicateSummary.gate?.failures ?? []).length }) })
                     : null,
-                  ev.replicateSummary ? h('span', { style: s.meta }, `${ev.replicateSummary.shots} 镜 / ${ev.replicateSummary.segments} 段`) : null,
+                  ev.replicateSummary ? h('span', { style: s.meta }, fill(t('shotsSegments'), { n: ev.replicateSummary.shots, m: ev.replicateSummary.segments })) : null,
                 ),
                 ev.replicate
                   ? h('details', null,
@@ -1116,7 +1193,7 @@ window.__ModuleLoader__.load({
             h('div', { style: s.kv },
               h('span', { style: s.label }, t('hook')),
               h('span', null, idea.hook),
-              h('span', { style: s.label }, '一句话'),
+              h('span', { style: s.label }, t('labelOneLiner')),
               h('span', null, idea.oneLiner),
               h('span', { style: s.label }, t('whyNow')),
               h('span', null, idea.whyNow),
@@ -1124,7 +1201,7 @@ window.__ModuleLoader__.load({
               h('span', null, idea.risk),
             ),
             h('div', { style: s.row },
-              h('span', { style: s.meta }, `钩子 ${idea.score?.hook ?? '?'} · 契合 ${idea.score?.fit ?? '?'} · 可拍 ${idea.score?.feasible ?? '?'}`),
+              h('span', { style: s.meta }, fill(t('scoreLine'), { hook: idea.score?.hook ?? '?', fit: idea.score?.fit ?? '?', feasible: idea.score?.feasible ?? '?' })),
             ),
             h('div', { style: { ...s.row, marginTop: '2px' } },
               h('button', { type: 'button', style: s.btnGhost, onClick: () => onChoose(index) }, t('choose')),
@@ -1150,7 +1227,7 @@ window.__ModuleLoader__.load({
               `${beat.t ?? ''}s · ${beat.action}${beat.emotion ? `（${beat.emotion}）` : ''} · ${beat.durationSec ?? '?'}s`)),
           )),
         ),
-        h('p', { style: { margin: 0 } }, `结局：${artifact.ending ?? '—'}`),
+        h('p', { style: { margin: 0 } }, fill(t('labelEnding'), { text: artifact.ending ?? '—' })),
       );
     }
 
@@ -1197,7 +1274,7 @@ window.__ModuleLoader__.load({
           setEditingId('');
           setNotice(t('shotEditSaved'));
         } catch (error) {
-          setNotice(`保存失败：${error.message ?? error}`);
+          setNotice(fill(t('noticeSaveFailed'), { msg: error.message ?? error }));
         } finally {
           setBusy(false);
         }
@@ -1205,7 +1282,7 @@ window.__ModuleLoader__.load({
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
         h('div', { style: s.row },
           h('strong', null, artifact.title ?? ''),
-          h('span', { style: s.meta }, `${artifact.targetSeconds ?? '?'}s · ${shots.length} 镜 · ${segments.length} 段`),
+          h('span', { style: s.meta }, fill(t('storyboardMeta'), { d: artifact.targetSeconds ?? '?', n: shots.length, m: segments.length })),
           gate?.ok ? Badge({ tone: 'good', children: t('gateOk') }) : gate ? Badge({ tone: 'bad', children: fill(t('gateFail'), { n: (gate.failures ?? []).length }) }) : null,
         ),
         notice ? h('p', { style: { ...s.meta, fontSize: '12px' } }, notice) : null,
@@ -1279,7 +1356,7 @@ window.__ModuleLoader__.load({
               : [
                 h('span', { key: 'a', style: s.mono }, shot.action),
                 h('details', { key: 'p' },
-                  h('summary', { style: { ...s.meta, cursor: 'pointer' } }, '提示词'),
+                  h('summary', { style: { ...s.meta, cursor: 'pointer' } }, t('labelPrompt')),
                   h('pre', { style: s.pre }, shot.prompt ?? ''),
                 ),
               ],
@@ -1319,7 +1396,7 @@ window.__ModuleLoader__.load({
         h('div', { style: s.row }, (artifact.characters ?? []).map((row, index) =>
           h('span', { key: index, style: s.chip }, `${row.name} · ${nameOf(row.voiceId)} · ×${row.rate ?? 1}`))),
         artifact.narration?.enabled
-          ? h('p', { style: s.meta }, `旁白：${nameOf(artifact.narration.voiceId)} · ${artifact.narration.emotion ?? ''}`)
+          ? h('p', { style: s.meta }, fill(t('labelNarration'), { voice: nameOf(artifact.narration.voiceId), emotion: artifact.narration.emotion ?? '' }))
           : null,
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
           (artifact.lines ?? []).map((line, index) => h('div', { key: index, style: s.row },
@@ -1338,7 +1415,7 @@ window.__ModuleLoader__.load({
       if (tasks.length === 0) return h('p', { style: s.meta }, t('noArtifact'));
       const labels = {
         queued: t('renderQueued'), pending: t('renderQueued'), completed: t('renderCompleted'),
-        failed: STATUS_LABEL.failed, cancelled: t('renderCancelled'),
+        failed: t('status_failed'), cancelled: t('renderCancelled'),
         processing: t('running'), running: t('running'), in_progress: t('running'),
       };
       const completed = tasks.filter((task) => task.status === 'completed' && task.file).length;
@@ -1414,7 +1491,7 @@ window.__ModuleLoader__.load({
             ...order.map((entry, index) => h('div', { key: `${entry.segmentId}-${index}`, style: s.row },
               h('span', { style: s.num }, String(index + 1)),
               h('strong', { style: { fontSize: '12px' } }, entry.segmentId),
-              h('span', { style: s.meta }, `${t('transition')} ${entry.transition ?? 'cut'}${entry.trimStart ? ` · 裁头 ${entry.trimStart}s` : ''}${entry.trimEnd ? ` · 裁尾 ${entry.trimEnd}s` : ''}`),
+              h('span', { style: s.meta }, `${t('transition')} ${entry.transition ?? 'cut'}${entry.trimStart ? ` · ${fill(t('trimHead'), { n: entry.trimStart })}` : ''}${entry.trimEnd ? ` · ${fill(t('trimTail'), { n: entry.trimEnd })}` : ''}`),
               h('span', { style: { ...s.meta, flex: 1, minWidth: '120px' } }, entry.reason ?? ''),
             )),
             h('div', { style: s.row },
@@ -1773,8 +1850,8 @@ window.__ModuleLoader__.load({
               h('span', { style: s.num }, String(index + 1)),
               h('span', { style: { ...s.dot, background: DOT_COLOR[tone] } }),
               h('span', { style: s.stageName }, stage.label),
-              Badge({ tone: 'dim', children: AGENT_LABEL[stage.agent] ?? stage.agent }),
-              Badge({ tone, children: STATUS_LABEL[record.status] ?? record.status }),
+              Badge({ tone: 'dim', children: agentLabel(t, stage.agent) }),
+              Badge({ tone, children: statusLabel(t, record.status) ?? record.status }),
               record.status === 'done' && record.note
                 ? Badge({ tone: 'good', children: t('manualReviewPassed') })
                 : record.review?.score != null ? Badge({ tone: record.review.pass ? 'good' : 'warn', children: fill(t('score'), { n: record.review.score }) }) : null,
@@ -1867,7 +1944,7 @@ window.__ModuleLoader__.load({
         report
           ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
             h('div', { style: s.row },
-              Badge({ tone: report.ok ? 'good' : 'bad', children: `${report.summary.ok} 通过 · ${report.summary.warn} 提醒 · ${report.summary.fail} 失败` }),
+              Badge({ tone: report.ok ? 'good' : 'bad', children: fill(t('doctorSummary'), { ok: report.summary.ok, warn: report.summary.warn, fail: report.summary.fail }) }),
             ),
             ...report.items.map((item, index) => h('div', { key: index, style: { display: 'flex', flexDirection: 'column', gap: '1px' } },
               h('span', { style: { ...s.meta, fontSize: '12px', color: colorOf(item.status) } },
@@ -1895,7 +1972,7 @@ window.__ModuleLoader__.load({
             const result = await call('prompts', {});
             setItems(result?.items ?? []);
           } catch (error) {
-            setNotice(`读取失败：${error.message ?? error}`);
+            setNotice(fill(t('noticeReadFailed'), { msg: error.message ?? error }));
           }
         })();
       }, []);
@@ -1911,7 +1988,7 @@ window.__ModuleLoader__.load({
           setItems(result?.items ?? []);
           setNotice(content.trim() ? t('promptSaved') : t('promptResetDone'));
         } catch (error) {
-          setNotice(`保存失败：${error.message ?? error}`);
+          setNotice(fill(t('noticeSaveFailed'), { msg: error.message ?? error }));
         } finally {
           setBusy(false);
         }
@@ -1925,7 +2002,7 @@ window.__ModuleLoader__.load({
             style: { ...s.input, width: '200px' },
             value: name,
             onChange: (event) => setName(event.target.value),
-          }, ...names.map((key) => h('option', { key, value: key }, `${key}${items.find((row) => row.name === key)?.custom ? ' · 已自定义' : ''}`))),
+          }, ...names.map((key) => h('option', { key, value: key }, `${key}${items.find((row) => row.name === key)?.custom ? t('customSuffix') : ''}`))),
           h('div', { style: s.spacer }),
           h('button', { type: 'button', style: { ...s.btn, ...(busy ? s.disabled : {}) }, disabled: busy, onClick: () => void save(text) }, t('promptSave')),
           h('button', { type: 'button', style: { ...s.btnGhost, ...(busy ? s.disabled : {}) }, disabled: busy, onClick: () => void save('') }, t('promptReset')),
@@ -2060,7 +2137,7 @@ window.__ModuleLoader__.load({
         }
         try {
           if (window.Notification && window.Notification.permission === 'granted') {
-            new window.Notification(`创意工作台需要复核：${pending.projectTitle ?? ''}`, {
+            new window.Notification(fill(t('notifyTitle'), { title: pending.projectTitle ?? '' }), {
               body: `${pending.stageLabel ?? ''}：${pending.reason ?? ''}`,
               tag: `creative-${pending.at}`,
             });
@@ -2116,7 +2193,7 @@ window.__ModuleLoader__.load({
         remember(created.id);
         await loadProjects(created.id);
         if (startNow) await call('run', { id: created.id, stopBeforeRender: true });
-        setNotice(startNow ? '已开跑：创意 → 剧情 → 分镜 → 人物 → 配音。确认分段清单后出片。' : '');
+        setNotice(startNow ? t('noticeStarted') : '');
       });
 
       const loadDemo = () => guard(async () => {
@@ -2177,7 +2254,7 @@ window.__ModuleLoader__.load({
       const grabHotspots = () => guard(async () => {
         const result = await call('hotspots', { id: selected });
         await refresh(selected);
-        setNotice(`抓到 ${result.hotspots.length} 条热点`);
+        setNotice(fill(t('noticeHotspots'), { n: result.hotspots.length }));
       });
 
       const runReference = (payload) => guard(async () => {
@@ -2188,7 +2265,7 @@ window.__ModuleLoader__.load({
       });
 
       const addHotspot = (title) => guard(async () => {        const current = data?.project?.brief?.hotspots ?? [];
-        await call('updateBrief', { id: selected, brief: { hotspots: [{ title, source: '手动', at: new Date().toISOString() }, ...current] } });
+        await call('updateBrief', { id: selected, brief: { hotspots: [{ title, source: t('sourceManual'), at: new Date().toISOString() }, ...current] } });
         await refresh(selected);
       });
 
@@ -2204,7 +2281,7 @@ window.__ModuleLoader__.load({
 
       const header = h('div', { style: s.head },
         h('h2', { style: s.headTitle }, t('title')),
-        h('span', { style: s.headMeta }, config ? `${projects.length} 个项目` : ''),
+        h('span', { style: s.headMeta }, config ? fill(t('projectCount'), { n: projects.length }) : ''),
         h('div', { style: s.spacer }),
         projects.length > 0
           ? h('select', {
@@ -2328,6 +2405,7 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale'],
       apply(ctx) {
         const t = ctx.locale.bind(NS);
+  text = (key, vars) => fill(t(key), vars);
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'creative-studio: copy');
         ctx.effect(() => ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
           name: 'sidebar.panellist', id: ID, order: 38, label: () => t('title'), locale: NS,

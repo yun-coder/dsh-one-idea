@@ -147,8 +147,9 @@ queue.push(
 const clientUrl = new URL('../client.js', import.meta.url);
 await import(`${clientUrl.href}?smoke=${Date.now()}`);
 
+let locales = null;
 const ctx = {
-  locale: { bind: () => (key) => key, register: () => {} },
+  locale: { bind: () => (key) => key, register: (_ns, dict) => { locales = dict; } },
   effect(fn) {
     fn();
     return () => {};
@@ -168,6 +169,19 @@ const loaded = globalThis.__loaded;
 if (typeof loaded?.apply !== 'function') throw new Error('client bundle 没有返回 apply()');
 loaded.apply(ctx);
 if (!registration) throw new Error('没有注册 main 面板');
+
+// 中英文案必须一一对应，英文里不能残留中文。
+if (!locales?.zh || !locales?.en) throw new Error('没有注册 zh / en 文案');
+const zhKeys = Object.keys(locales.zh);
+const enKeys = Object.keys(locales.en);
+const missing = zhKeys.filter((key) => !(key in locales.en));
+const extra = enKeys.filter((key) => !(key in locales.zh));
+if (missing.length) throw new Error(`英文缺 ${missing.length} 条：${missing.slice(0, 6).join(', ')}`);
+if (extra.length) throw new Error(`英文多 ${extra.length} 条：${extra.slice(0, 6).join(', ')}`);
+const cjk = /[\u4e00-\u9fa5]/;
+const untranslated = enKeys.filter((key) => cjk.test(String(locales.en[key])));
+if (untranslated.length) throw new Error(`英文文案里还有中文：${untranslated.slice(0, 6).join(', ')}`);
+console.log(`✓ 中英文案齐全：${zhKeys.length} 条，英文无残留中文`);
 
 const config = queue[0];
 const projects = queue[1];
