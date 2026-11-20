@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { machineFile } from './config.js';
+import { readWorkbenchImage } from './image-workbench.js';
 import { findCodex } from './video.js';
 import { resolveOpenFilm } from './openfilm.js';
 
@@ -27,7 +28,7 @@ function writable(dir) {
   }
 }
 
-export function runDoctor({ options, dataRoot, projectRoot, promptsDir }) {
+export async function runDoctor({ options, dataRoot, projectRoot, promptsDir, probeModel }) {
   const items = [];
   const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -89,11 +90,25 @@ export function runDoctor({ options, dataRoot, projectRoot, promptsDir }) {
       : failItem('rea-video 路径不对', options.reaVideoCmd, '改 reaVideoCmd，或置空跳过'));
   }
 
-  // 8. Codex（可选，生图用）
+  // 8. 生图：工作台优先，其次 Codex / HTTP
+  const workbench = (() => {
+    try {
+      return readWorkbenchImage({ serverDir: options.workbenchServerDir, file: options.workbenchConfig });
+    } catch {
+      return null;
+    }
+  })();
   const codex = options.codexCmd || findCodex();
-  items.push(codex && existsSync(codex)
-    ? okItem('Codex（生图）', codex)
-    : warnItem('没有 Codex', '定妆图会退回 HTTP 生图端点', '可选：装 Codex 桌面版，或配 imageKey + imageBaseUrl'));
+  if (workbench) {
+    items.push(okItem('生图后端（工作台）', `${workbench.providerName} / ${workbench.model}｜${workbench.baseUrl}`));
+  } else if (codex && existsSync(codex)) {
+    items.push(warnItem('生图后端（Codex）', '没有读到生图工作台的接口配置，退回 Codex image_generation',
+      '要统一走工作台：在「生图工作台」里填好 Base URL 与 Key'));
+  } else if (options.imageKey) {
+    items.push(okItem('生图后端（HTTP）', options.imageBaseUrl || 'HTTP 端点'));
+  } else {
+    items.push(warnItem('没有生图后端', '人物定妆图会被跳过', '装「生图工作台」并配置接口，或装 Codex，或配 imageKey + imageBaseUrl'));
+  }
 
   // 9. OpenFilm（可选，收尾用）
   let openfilm = null;
@@ -115,13 +130,23 @@ export function runDoctor({ options, dataRoot, projectRoot, promptsDir }) {
     items.push(failItem('没有出片密钥', 'easyframeApiKey / mnmxCardKey 都是空的', '在 machine.json 或环境变量里配一个，否则出片阶段必然失败'));
   }
 
-  // 11. 生图
-  if (options.imageBackend === 'codex' || (codex && existsSync(codex))) {
-    items.push(okItem('生图后端', 'Codex image_generation'));
-  } else if (options.imageKey) {
-    items.push(okItem('生图后端', options.imageBaseUrl || 'HTTP 端点'));
+  // 11. 默认模型是否支持看图（画面验收 / 逐镜复核依赖它）
+  if (probeModel) {
+    try {
+      const model = await probeModel();
+      if (!model?.model) {
+        items.push(warnItem('默认模型', '读不到当前选择', '先在设置里选一个模型'));
+      } else if ((model.inputModalities ?? []).includes('image')) {
+        items.push(okItem('默认模型（含看图）', `${model.provider} / ${model.model}`));
+      } else {
+        items.push(warnItem('默认模型不支持看图', `${model.provider} / ${model.model}`,
+          '画面验收与逐镜看图复核会失败：换一个支持图像输入的模型'));
+      }
+    } catch (error) {
+      items.push(warnItem('默认模型', `读取失败：${error.message}`, '在设置里重选一次模型'));
+    }
   } else {
-    items.push(warnItem('没有生图后端', '人物定妆图会被跳过', '装 Codex，或配 imageKey + imageBaseUrl'));
+    items.push(warnItem('默认模型', 'CLI 下读不到宿主的模型能力；在面板「运行自检」里可以检测', ''));
   }
 
   // 12. 包内文件

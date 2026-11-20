@@ -10,7 +10,7 @@ import { resolveConfig } from '../engine/config.js';
 import { runDoctor } from '../engine/doctor.js';
 
 const resolved = resolveConfig({});
-const result = runDoctor(resolved);
+const result = await runDoctor(resolved);
 const icon = { ok: '✓', warn: '!', fail: '✗' };
 
 console.log('\n创意工作台 · 环境自检\n');

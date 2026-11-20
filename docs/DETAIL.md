@@ -272,7 +272,7 @@ node test/real-project.mjs <项目目录>     # 真实项目：拿已有的 06-e
 | 工具 | 用途 |
 |---|---|
 | `h3_generate_video` | 文生视频 / 首帧 / 首尾帧 / 多参考（5–15 秒，480p/720p，9 种画幅） |
-| `h3_generate_image` | 生图：默认用本机 Codex 的 `image_generation`，没有 Codex 时走 OpenAI 兼容端点 |
+| `h3_generate_image` | 生图：默认走「生图工作台」配置的接口，读不到再退 Codex，最后退 HTTP 端点 |
 | `h3_concat_videos` | 按顺序把已完成的任务拼成一条 MP4 |
 | `h3_video_tasks` | 查独立出片任务（持久化索引，重载插件后还在） |
 | `h3_remix_video` | 拉片 + 报告（`replicate: true` 时连复刻分镜一起出） |

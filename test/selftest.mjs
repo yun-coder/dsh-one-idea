@@ -21,6 +21,7 @@ import { createAgents } from '../engine/agents.js';
 import { resolveConfig } from '../engine/config.js';
 import { runDoctor } from '../engine/doctor.js';
 import { materializeDemo } from '../engine/demo.js';
+import { readWorkbenchImage } from '../engine/image-workbench.js';
 import { platformOf, checkPlatform, platformBrief } from '../engine/platform.js';
 import { glyphFraction, overlapScore, verdictOf, sampleTimes, detectBurnedCaptions } from '../engine/burned-captions.js';
 import { matchesStamp, promptLayerFingerprint } from '../engine/fingerprint.js';
@@ -429,7 +430,7 @@ console.log('\n[11] 环境自检');
     scriptsDir: join(dir, 'no-scripts'),
     ffmpegPath,
   });
-  const report = runDoctor(resolved);
+  const report = await runDoctor(resolved);
   check('doctor 找出缺 shot-contract', report.items.some((item) => item.status === 'fail' && item.name.includes('shot-contract')));
   check('doctor 汇总可信', report.summary.ok > 0 && report.summary.fail >= 1 && report.ok === false);
   await rm(dir, { recursive: true, force: true });
@@ -446,6 +447,34 @@ console.log('\n[12] 示例项目');
   check('没有残留占位符', !JSON.stringify(template).includes('__SEG_') && !JSON.stringify(template).includes('__FINAL__'));
   check('示例成片有内容', (await readFile(template.finalFile)).length > 100 * 1024);
   await rm(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[13] 生图工作台接口 + 模型看图能力');
+{
+  const dir = await mkdtemp(join(tmpdir(), 'cs-wb-'));
+  await writeFile(join(dir, 'config.local.json'), JSON.stringify({
+    api_base_url: 'https://example.com/v1',
+    api_key: 'sk-test',
+    model_image: 'gpt-image-9',
+    provider_name: '示例接口',
+  }), 'utf8');
+  const cfg = readWorkbenchImage({ serverDir: dir });
+  check('读到工作台配置', cfg?.baseUrl === 'https://example.com/v1' && cfg?.model === 'gpt-image-9', JSON.stringify(cfg));
+  check('缺接口配置时返回 null', readWorkbenchImage({ serverDir: join(dir, 'nope') }) === null);
+  await rm(dir, { recursive: true, force: true });
+
+  const base = resolveConfig({
+    dataDir: join(tmpdir(), 'cs-doctor-model'),
+    projectDir: join(tmpdir(), 'cs-doctor-model-projects'),
+    skillDir: join(tmpdir(), 'cs-doctor-model-skill'),
+    scriptsDir: join(tmpdir(), 'cs-doctor-model-scripts'),
+    ffmpegPath,
+  });
+  const textOnly = await runDoctor({ ...base, probeModel: async () => ({ provider: 'p', model: 'm', inputModalities: ['text'] }) });
+  check('doctor 指出模型不能看图', textOnly.items.some((item) => item.name.includes('不支持看图') && item.status === 'warn'));
+  const vision = await runDoctor({ ...base, probeModel: async () => ({ provider: 'p', model: 'm', inputModalities: ['text', 'image'] }) });
+  check('doctor 认可可看图的模型', vision.items.some((item) => item.name.includes('含看图') && item.status === 'ok'));
 }
 
 console.log(`\n结果：${pass} 通过，${failed} 失败`);

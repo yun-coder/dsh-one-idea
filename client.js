@@ -179,6 +179,7 @@ window.__ModuleLoader__.load({
       doctorRun: '运行自检',
       doctorRunning: '检查中…',
       demoButton: '载入示例项目',
+      runtimeUsed: '本次使用',
       demoLoaded: '示例项目已载入：可以直接看成片，也可以从任意阶段重跑',
       agentProducer: '生产 Agent',
       agentEditor: '剪辑团队 Agent',
@@ -425,6 +426,7 @@ window.__ModuleLoader__.load({
       doctorRun: 'Run check',
       doctorRunning: 'Checking…',
       demoButton: 'Load demo project',
+      runtimeUsed: 'Using',
       demoLoaded: 'Demo loaded: watch the film, or rerun any stage',
       agentProducer: 'Production agent',
       agentEditor: 'Edit team agent',
@@ -2335,6 +2337,14 @@ window.__ModuleLoader__.load({
             ...[project.platform, project.aspect, project.resolution, project.brief?.projectMode === 'story' ? t('projectStory') : null, project.brief?.audioMode === 'no-dialogue' ? t('noDialogueAudio') : null, project.targetSeconds ? `${project.targetSeconds}s` : null]
               .filter(Boolean).map((value) => h('span', { key: value, style: s.chip }, value)),
           ),
+          data?.runtime
+            ? h('p', { style: { ...s.meta, fontSize: '12px' } },
+              `${t('runtimeUsed')}：${[
+                data.runtime.llm ? `${data.runtime.llm.provider}/${data.runtime.llm.model}` : '',
+                data.runtime.video?.model ?? '',
+                data.runtime.image?.backend ?? '',
+              ].filter(Boolean).join(' · ')}`)
+            : null,
         ) : null,
         h('nav', { 'aria-label': t('title'), style: s.row },
           ...[

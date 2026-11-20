@@ -32,8 +32,12 @@ export const DEFAULTS = {
   imageBaseUrl: 'http://127.0.0.1:38650/v1',
   imageKey: '',
   imageModel: 'gpt-image-2',
-  /** 生图后端：auto 有 Codex 就用 Codex，否则走 HTTP；也可强制 'codex' / 'http'。 */
+  /** 生图后端：auto = 生图工作台 → Codex → 插件自带 HTTP；也可强制 'workbench' / 'codex' / 'http'。 */
   imageBackend: 'auto',
+  /** 「生图工作台」的运行时目录（默认 ~/.dsh/image-workbench/server）；留空自动找。 */
+  workbenchServerDir: '',
+  /** 也可以直接指到生图工作台的 config.local.json。 */
+  workbenchConfig: '',
   /** Codex 命令行路径；留空自动找。 */
   codexCmd: '',
   ffmpegPath: '',
@@ -107,6 +111,8 @@ export function resolveConfig(config = {}, machine = loadMachineOverrides()) {
   fill('mnmxCardKey', ['MNMX_CARD_KEY']);
   fill('imageKey', ['IMAGE_API_KEY', 'OPENAI_API_KEY']);
   fill('imageBackend');
+  fill('workbenchServerDir', ['DSH_IMAGE_SERVER_DIR']);
+  fill('workbenchConfig', ['DSH_IMAGE_WORKBENCH_CONFIG']);
   fill('codexCmd', ['CODEX_BIN']);
   fill('ffmpegPath', ['FFMPEG_PATH']);
   fill('bgmDir');

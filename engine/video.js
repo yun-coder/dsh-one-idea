@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
+import { readWorkbenchImage } from './image-workbench.js';
 
 /**
  * 找本机 Codex 命令行（Codex 桌面版自带 codex.exe）。版本号会随更新变化，所以按前缀找最新的。
@@ -239,6 +240,8 @@ export function taskView(record) {
 }
 
 export function createVideoEngine({ config = {}, log = () => {} }) {
+  /** 生图后端解析（工作台 → Codex → 插件自带 HTTP）。 */
+  const resolveImageBackend = () => resolveImageBackendImpl(config);
   const easyframe = {
     name: 'easyframe',
     label: 'EasyFrame MiniMax-H3',
@@ -461,17 +464,21 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
     },
 
     /**
-     * 人物定妆图。两条后端：
-     *  - codex：调用本机 Codex 的 image_generation（桌面版自带 codex.exe），按它的额度计费、单张约 40k tokens；
-     *  - http：任意 OpenAI 兼容的 /images/generations（原来的号池）。
-     * imageBackend: auto 有 Codex 就用 Codex，否则用 http。失败不算致命，人物阶段会记录并继续。
+     * 人物定妆图。三条后端，按 imageBackend 选：
+     *  - workbench（默认优先）：用「生图工作台」里配置的接口（Base URL / Key / 图片模型）；
+     *  - codex：本机 Codex 的 image_generation；
+     *  - http：插件自己配置的 OpenAI 兼容端点。
+     * auto 的顺序是 workbench → codex → http；失败不算致命，人物阶段会记录并继续。
      */
     async generateImage({ prompt, model, size, dir, filename }) {
-      const backend = String(config.imageBackend ?? 'auto');
-      const codexCmd = config.codexCmd || findCodex();
-      const useCodex = backend === 'codex' || (backend === 'auto' && codexCmd);
-      if (useCodex) return codexImage({ prompt, dir, filename, cmd: codexCmd || config.codexCmd });
-      if (!config.imageKey) throw providerError('auth', '没有配置生图 Key（imageKey），也没有可用的 Codex 命令行');
+      const backend = resolveImageBackend();
+      if (!backend) {
+        throw providerError('auth', '没有可用的生图后端：装「生图工作台」并配置接口，或配 Codex，或配 imageKey + imageBaseUrl');
+      }
+      if (backend.kind === 'workbench') {
+        return workbenchImage({ cfg: backend.cfg, prompt, size, dir, filename, model });
+      }
+      if (backend.kind === 'codex') return codexImage({ prompt, dir, filename, cmd: backend.cmd });
       const base = String(config.imageBaseUrl ?? '').replace(/\/+$/, '');
       if (!base) throw providerError('auth', '没有配置生图端点（imageBaseUrl）');
       const body = Buffer.from(JSON.stringify({ model: model || config.imageModel || 'gpt-image-2', prompt, size: size || config.imageSize || 'auto', n: 1 }), 'utf8');
@@ -495,7 +502,69 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
       } else throw providerError('bad-request', '图片数据为空');
       return { file, model: model || config.imageModel };
     },
+
+    /** 面板/工具里显示的“这次用的是什么”：工作台接口名 + 模型，或 Codex / HTTP。 */
+    imageBackendLabel() {
+      const backend = resolveImageBackend();
+      if (!backend) return '未配置';
+      if (backend.kind === 'workbench') return `${backend.cfg.providerName} / ${backend.cfg.model}`;
+      if (backend.kind === 'codex') return 'Codex image_generation';
+      return `HTTP / ${config.imageModel || 'gpt-image-2'}`;
+    },
   };
+}
+
+/** 按 imageBackend 选实际后端：auto = 工作台 → Codex → 插件自带 HTTP。 */
+function resolveImageBackendImpl(config) {
+  const wanted = String(config.imageBackend ?? 'auto').toLowerCase();
+  const workbench = readWorkbenchImage({ serverDir: config.workbenchServerDir, file: config.workbenchConfig });
+  const codex = config.codexCmd || findCodex();
+  if (wanted === 'workbench') return workbench ? { kind: 'workbench', cfg: workbench } : null;
+  if (wanted === 'codex') return codex ? { kind: 'codex', cmd: codex } : null;
+  if (wanted === 'http') return config.imageKey ? { kind: 'http' } : null;
+  if (workbench) return { kind: 'workbench', cfg: workbench };
+  if (codex) return { kind: 'codex', cmd: codex };
+  if (config.imageKey) return { kind: 'http' };
+  return null;
+}
+
+/** 用「生图工作台」配置的接口生成一张图（OpenAI 兼容 /images/generations）。 */
+async function workbenchImage({ cfg, prompt, size, dir, filename, model }) {
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, filename || `img_${Date.now()}.png`);
+  const payload = {
+    model: model || cfg.model,
+    prompt: String(prompt ?? '').trim(),
+    n: 1,
+    quality: 'auto',
+  };
+  if (size && size !== 'auto') payload.size = size;
+  if (cfg.responseFormat === 'b64_json' || cfg.responseFormat === 'url') payload.response_format = cfg.responseFormat;
+  const response = await fetch(`${cfg.baseUrl}/images/generations`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(300_000),
+  });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+  if (response.status >= 300 || !data) {
+    throw providerError('server', `生图工作台接口 HTTP ${response.status}：${text.slice(0, 240)}`);
+  }
+  const item = Array.isArray(data.data) ? data.data[0] : null;
+  if (!item) throw providerError('bad-request', '接口返回成功但没有图片数据（确认是 OpenAI 兼容的 images 接口）');
+  if (item.b64_json) await writeFile(file, Buffer.from(String(item.b64_json), 'base64'));
+  else if (item.url) {
+    const download = await fetch(String(item.url));
+    if (!download.ok) throw providerError('network', `下载图片失败 HTTP ${download.status}`);
+    await writeFile(file, Buffer.from(await download.arrayBuffer()));
+  } else throw providerError('bad-request', '图片数据为空');
+  return { file, model: payload.model, provider: cfg.providerName };
 }
 
 /** 用本机 Codex 的 image_generation 生成一张图，落到目标路径。 */

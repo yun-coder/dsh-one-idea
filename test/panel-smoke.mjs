@@ -109,6 +109,11 @@ const data = {
     edit: { order: [{ segmentId: 'E01-01', trimStart: 0, trimEnd: null, transition: 'fade', reason: '钩子前置' }], audio: { bgm: '钢琴', gainDb: -18, lufs: -14 }, packaging: { title: '十二点的清汤面', hook: '12 块', description: '文案', hashtags: ['#深夜食堂', '#清汤面'] }, rationale: '理由', notes: ['提醒'] },
   },
   render: { tasks: [{ segmentId: 'E01-01', status: 'completed', duration: 5.2, file: 'D:/demo/segments/a.mp4', providerLabel: 'EasyFrame', progress: 100 }] },
+  runtime: {
+    llm: { provider: 'deepseek-account', model: 'deepseek-flash' },
+    video: { provider: 'auto', model: 'minimax-h3-mini', resolution: '720p' },
+    image: { backend: '88API / gpt-image-2', mode: 'auto' },
+  },
   dir: 'D:/demo',
 };
 

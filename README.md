@@ -62,15 +62,19 @@ npm run doctor
 | douyin-teardown 技能脚本 | 下载 / 切点 / 语音转写 | 拉片台不可用，其余照常 |
 | FFmpeg 6.1+ | 剪辑、拼接、混音、抽帧 | 出片能跑，剪辑阶段失败 |
 | OpenFilm（可选） | 成片收尾（字幕带 / LUT / 4K / 逐帧体检） | 自动退回 FFmpeg |
+| 生图工作台（推荐） | 人物定妆图（用它配置的接口与图片模型） | 退回 Codex，再退回 HTTP 端点 |
 | Codex 桌面版（可选） | 人物定妆图（`image_generation`） | 退回 HTTP 生图端点；都没有就跳过定妆图 |
 
 ### 生图后端
 
-`imageBackend: auto` 时优先用本机 Codex 的 `image_generation`（自动从
-`~/.codex/config.toml` 找 `codex.exe`），否则走 `imageBaseUrl` + `imageKey` 的
-OpenAI 兼容端点。也可以强制 `codex` 或 `http`。
+`imageBackend: auto` 时按这个顺序选，读不到就往下退：
 
-注意：Codex 用你自己的额度，单张图大约 40k tokens、耗时 1–2 分钟。
+1. **「生图工作台」配置的接口**——直接读 `~/.dsh/image-workbench/server/config.local.json`
+   里的 Base URL / Key / 图片模型（`config.local.json` 或 `DSH_IMAGE_SERVER_DIR` 可覆盖路径）；
+2. 本机 Codex 的 `image_generation`（自动从 `~/.codex/config.toml` 找 `codex.exe`）；
+3. 插件自己的 `imageBaseUrl` + `imageKey`。
+
+也可以强制 `workbench` / `codex` / `http`。**模型不是写死的**：工作台换接口、换模型，下一次出图就跟着换。
 
 ## 配置
 

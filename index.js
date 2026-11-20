@@ -206,6 +206,26 @@ export function apply(ctx, config = {}) {
     throw new Error('读不到默认模型：请先在设置里选一个模型，再跑创意工作台');
   }
 
+  /** 本次项目实际用到的模型/接口：模型不固定，所以每次状态查询都实时算。 */
+  function runtimeInfo() {
+    let llm = null;
+    try {
+      const selection = ctx.get('agentDefaultModel')?.currentSelection?.();
+      if (selection?.provider && selection?.model) llm = { provider: String(selection.provider), model: String(selection.model) };
+    } catch {
+      llm = null;
+    }
+    return {
+      llm,
+      video: {
+        provider: String(options.videoProvider ?? 'auto'),
+        model: String(options.videoModel ?? ''),
+        resolution: String(options.resolution ?? ''),
+      },
+      image: { backend: video.imageBackendLabel(), mode: String(options.imageBackend ?? 'auto') },
+    };
+  }
+
   /** 阶段指纹：谁做的这一版（模型 + 提示词层）。读不到模型时退化成 unknown，不阻断流程。 */
   function stageFingerprint() {
     let model = 'unknown';
@@ -1491,7 +1511,19 @@ export function apply(ctx, config = {}) {
 
     /** 环境自检：装完先跑一遍，缺什么、怎么补一条条列出来 */
     async doctor() {
-      return ok(runDoctor({ options, dataRoot, projectRoot, promptsDir }));
+      return ok(await runDoctor({
+        options,
+        dataRoot,
+        projectRoot,
+        promptsDir,
+        // 模型不是固定的：每次自检都读宿主当前选择，并问它对不对得起“看图”这件事。
+        probeModel: async () => {
+          const selection = ctx.get('agentDefaultModel')?.currentSelection?.();
+          if (!selection?.provider || !selection?.model) return null;
+          const info = await ctx.llm.resolveModelInfo(selection.provider, selection.model).catch(() => null);
+          return { provider: selection.provider, model: selection.model, inputModalities: info?.inputModalities ?? [] };
+        },
+      }));
     },
 
     /** 提示词模板：列出现有覆盖文件（没写就是内置写法） */
@@ -1726,6 +1758,7 @@ export function apply(ctx, config = {}) {
         },
         artifacts,
         render,
+        runtime: runtimeInfo(),
         dir: store.dirOf(project.id),
       });
     },
@@ -2291,6 +2324,7 @@ export function apply(ctx, config = {}) {
         stages,
         pendingReview: project.pendingReview ?? null,
         finalFile: project.finalFile ?? project.stages.edit?.finalFile ?? null,
+        runtime: runtimeInfo(),
         dir: store.dirOf(project.id),
       };
       if (args.full) {
@@ -2317,6 +2351,10 @@ export function apply(ctx, config = {}) {
           for (const issue of stage.issues ?? []) lines.push(`   待修：${issue}`);
         }
         if (value.pendingReview) lines.push(`⚠ 待人工复核：${value.pendingReview.stageLabel}｜${value.pendingReview.reason}`);
+        if (value.runtime) {
+          const llm = value.runtime.llm ? `${value.runtime.llm.provider} / ${value.runtime.llm.model}` : '（读不到）';
+          lines.push(`使用：模型 ${llm}｜视频 ${value.runtime.video?.model ?? ''}｜生图 ${value.runtime.image?.backend ?? ''}`);
+        }
         if (value.finalFile) lines.push(`成片：${value.finalFile}`);
         return textBlocks(lines.join('\n'));
       },
@@ -2608,7 +2646,7 @@ export function apply(ctx, config = {}) {
   const h3ImageTool = {
     name: 'h3_generate_image',
     description:
-      '（创意工作台内置）生成一张图并保存到本机，返回路径；可直接作为 h3_generate_video 的首帧/尾帧。默认用本机 Codex 的 image_generation（消耗 Codex 额度，单张约 1–2 分钟）；没有 Codex 时走配置的 OpenAI 兼容生图端点。',
+      '（创意工作台内置）生成一张图并保存到本机，返回路径；可直接作为 h3_generate_video 的首帧/尾帧。默认走「生图工作台」里配置的接口（Base URL / Key / 图片模型），读不到时退回本机 Codex 的 image_generation，再退回插件自己配置的 OpenAI 兼容端点。',
     parameters: {
       type: 'object',
       additionalProperties: false,
