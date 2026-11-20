@@ -31,14 +31,17 @@ DeepSeek Harness 插件。把「产品画像 + 实时热点」做成一条能交
 
 要求：DSH ≥ 0.2.1-rc.2、Node 20+（DSH 自带）。
 
+仓库：<https://github.com/yun-coder/dsh-one-idea>
+
 ```bash
-# 本地目录
-dsh plugin --profile <profile> add /path/to/dsh-creative-studio
-# 或 GitHub 仓库 / Release tarball
-dsh plugin --profile <profile> add https://github.com/<you>/dsh-creative-studio
+# 直接从 GitHub 装
+dsh plugin --profile <profile> add https://github.com/yun-coder/dsh-one-idea
+
+# 或本地目录（开发时）
+dsh plugin --profile <profile> add /path/to/dsh-one-idea
 ```
 
-也可以在 **插件 → 添加插件** 里填本地目录。装完刷新页面，左侧栏出现「创意工作台」。
+也可以在 **插件 → 添加插件** 里填仓库地址或本地目录。装完刷新页面，左侧栏出现「创意工作台」。
 
 装完先跑一次自检，缺什么会一条条列出来（面板「提示词模板」页也有同一个按钮）：
 

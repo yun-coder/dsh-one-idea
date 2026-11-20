@@ -60,5 +60,13 @@
       ]
     }
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yun-coder/dsh-one-idea.git"
+  },
+  "homepage": "https://github.com/yun-coder/dsh-one-idea#readme",
+  "bugs": {
+    "url": "https://github.com/yun-coder/dsh-one-idea/issues"
+  }
 }
