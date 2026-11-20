@@ -1,4 +1,4 @@
-# 创意工作台（dsh-creative-studio）
+# 创意工作台（dsh-one-idea）
 
 DeepSeek Harness 插件。把「产品画像 + 实时热点」做成一条能交付的短视频生产线：
 

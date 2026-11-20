@@ -257,7 +257,7 @@ export function apply(ctx, config = {}) {
         provider: route.provider,
         model: route.model,
         system,
-        messages: [{ role: 'user', content: blocks, source: { kind: 'plugin:dsh-creative-studio' } }],
+        messages: [{ role: 'user', content: blocks, source: { kind: 'plugin:dsh-one-idea' } }],
         temperature,
         maxTokens: Number(maxTokens) || options.llmMaxTokens,
         signal: combined,

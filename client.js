@@ -5,13 +5,13 @@
  * 这里只负责把「产品画像 + 热点 → 七个阶段 → 成片」画清楚，并把人的裁决送回去。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-creative-studio',
+  id: 'dsh-one-idea',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const ID = 'dsh-creative-studio';
+    const ID = 'dsh-one-idea';
     const NS = 'creativeStudio';
     const API = '/creative-studio/api';
     const FILE = '/creative-studio/file';

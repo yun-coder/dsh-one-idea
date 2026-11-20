@@ -1,4 +1,4 @@
-# 创意工作台（creative-studio）的装载层。
+# 创意工作台（dsh-one-idea）的装载层。
 #
 # 这里**不放任何密钥和本机绝对路径**。留空的值会依次回落到：
 #   1) ~/.dsh/creative-studio/machine.json（本机私有，不要提交）
@@ -7,7 +7,7 @@
 # 所以换机器只要准备一份 machine.json，仓库保持干净。
 - insert:
     - id: creative-studio
-      name: dsh-creative-studio
+      name: dsh-one-idea
       config:
         # 项目落盘目录；留空 = <dataDir>/projects
         projectDir: ''
