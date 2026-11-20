@@ -30,7 +30,7 @@ import {
 import { createAgents, extractJson } from './engine/agents.js';
 import { createReference } from './engine/reference.js';
 import { runVisionReview } from './engine/rea-vision.js';
-import { createVideoEngine, createVideoTaskStore, mimeOf, priceOf, taskView } from './engine/video.js';
+import { createVideoEngine, createVideoTaskStore, findCodex, mimeOf, priceOf, taskView } from './engine/video.js';
 import { createMedia, fadeFlagsOf } from './engine/media.js';
 import { createOpenFilmFinisher } from './engine/openfilm.js';
 
@@ -61,6 +61,10 @@ const DEFAULTS = {
   imageBaseUrl: 'http://127.0.0.1:38650/v1',
   imageKey: '',
   imageModel: 'gpt-image-2',
+  /** 生图后端：auto 有 Codex 就用 Codex，否则走 HTTP；也可强制 'codex' / 'http'。 */
+  imageBackend: 'auto',
+  /** Codex 命令行路径；留空自动在 %ProgramFiles%\WindowsApps\OpenAI.Codex_* 下找。 */
+  codexCmd: '',
   ffmpegPath: '',
   bgmDir: '',
   outWidth: 1080,
@@ -216,6 +220,8 @@ export function apply(ctx, config = {}) {
   fill('easyframeApiKey', ['EASYFRAME_API_KEY']);
   fill('mnmxCardKey', ['MNMX_CARD_KEY']);
   fill('imageKey', ['IMAGE_API_KEY', 'OPENAI_API_KEY']);
+  fill('imageBackend');
+  fill('codexCmd', ['CODEX_BIN']);
   fill('ffmpegPath', ['FFMPEG_PATH']);
   fill('bgmDir');
   fill('skillDir');
@@ -751,7 +757,8 @@ export function apply(ctx, config = {}) {
 
   /** 人物定妆图：过了六维门之后逐人生成，失败只记录不阻塞。 */
   async function ensurePortraits(project, artifact) {
-    if (!options.imageKey) return;
+    // 有 Codex 用 Codex 的 image_generation，否则用 HTTP 生图；两者都没有就跳过。
+    if (!options.imageKey && !options.codexCmd && !findCodex()) return;
     const dir = join(store.dirOf(project.id), 'portraits');
     let changed = false;
     for (const character of artifact.characters ?? []) {
@@ -2262,7 +2269,8 @@ export function apply(ctx, config = {}) {
 
   const h3ImageTool = {
     name: 'h3_generate_image',
-    description: '（创意工作台内置）用本机号池的 OpenAI 兼容端点生成一张图（默认 gpt-image-2），保存到本机并返回路径；可以直接作为 h3_generate_video 的首帧/尾帧。',
+    description:
+      '（创意工作台内置）生成一张图并保存到本机，返回路径；可直接作为 h3_generate_video 的首帧/尾帧。默认用本机 Codex 的 image_generation（消耗 Codex 额度，单张约 1–2 分钟）；没有 Codex 时走配置的 OpenAI 兼容生图端点。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -2273,7 +2281,7 @@ export function apply(ctx, config = {}) {
         size: { type: 'string', description: '尺寸，默认 auto；也可传 1024x1024 这类具体值' },
       },
     },
-    timeoutMs: 300_000,
+    timeoutMs: 900_000,
     async execute(args) {
       return runStandaloneImage({ prompt: args.prompt, model: args.model, size: args.size });
     },

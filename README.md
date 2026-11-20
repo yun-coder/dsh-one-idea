@@ -43,6 +43,15 @@ dsh plugin --profile <profile> add https://github.com/<you>/dsh-creative-studio
 | douyin-teardown 技能脚本 | 下载 / 切点 / 语音转写 | 拉片台不可用，其余照常 |
 | FFmpeg 6.1+ | 剪辑、拼接、混音、抽帧 | 出片能跑，剪辑阶段失败 |
 | OpenFilm（可选） | 成片收尾（字幕带 / LUT / 4K / 逐帧体检） | 自动退回 FFmpeg |
+| Codex 桌面版（可选） | 人物定妆图（`image_generation`） | 退回 HTTP 生图端点；都没有就跳过定妆图 |
+
+### 生图后端
+
+`imageBackend: auto` 时优先用本机 Codex 的 `image_generation`（自动从
+`~/.codex/config.toml` 找 `codex.exe`），否则走 `imageBaseUrl` + `imageKey` 的
+OpenAI 兼容端点。也可以强制 `codex` 或 `http`。
+
+注意：Codex 用你自己的额度，单张图大约 40k tokens、耗时 1–2 分钟。
 
 ## 配置
 

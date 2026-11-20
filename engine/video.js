@@ -8,10 +8,43 @@
  * 提交成功之后不再换后端——同一段的查询和下载必须回到提交它的那一家。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
+
+/**
+ * 找本机 Codex 命令行（Codex 桌面版自带 codex.exe）。版本号会随更新变化，所以按前缀找最新的。
+ * 也可以用 CODEX_BIN 或插件配置 codexCmd 指定。
+ */
+export function findCodex() {
+  if (process.env.CODEX_BIN && existsSync(process.env.CODEX_BIN)) return process.env.CODEX_BIN;
+  // Codex 自己的配置里记着 CLI 的真实路径（版本号变了也不用改插件）。
+  try {
+    const cfg = readFileSync(join(homedir(), '.codex', 'config.toml'), 'utf8');
+    const match = /CODEX_CLI_PATH\s*=\s*(['"])(.+?)\1/.exec(cfg);
+    if (match && existsSync(match[2])) return match[2];
+  } catch {
+    /* 没装 Codex 就是没有 */
+  }
+  // 再试 WindowsApps（这个目录通常不允许枚举，试一下不吃亏）。
+  const base = 'C:\\Program Files\\WindowsApps';
+  try {
+    const dirs = readdirSync(base)
+      .filter((name) => name.startsWith('OpenAI.Codex_'))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const dir of dirs) {
+      const exe = join(base, dir, 'app', 'resources', 'codex.exe');
+      if (existsSync(exe)) return exe;
+    }
+  } catch {
+    /* 没权限：交给 codexCmd 配置 */
+  }
+  return '';
+}
 
 const ASPECTS = ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', '4:5', '5:4'];
 /** 鼠鼠工具要整串画幅名，EasyFrame 要简写。 */
@@ -357,7 +390,7 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
 
   return {
     providers: () => order().map((provider) => provider.name),
-    hasImage: Boolean(config.imageKey),
+    hasImage: Boolean(config.imageKey) || Boolean(config.codexCmd || findCodex()),
 
     /** 提交一段。auto 模式下按顺序换后端，但只在「换一家还有救」的错误上换。 */
     async submit({ prompt, mode = 't2va', seconds = 5, resolution = '720p', aspect = '9:16', model, images = [] }) {
@@ -424,9 +457,18 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
       return { file, bytes: bytes.length };
     },
 
-    /** 人物定妆图：走本机号池的 OpenAI 兼容端点。失败不算致命，人物阶段会记录并继续。 */
+    /**
+     * 人物定妆图。两条后端：
+     *  - codex：调用本机 Codex 的 image_generation（桌面版自带 codex.exe），按它的额度计费、单张约 40k tokens；
+     *  - http：任意 OpenAI 兼容的 /images/generations（原来的号池）。
+     * imageBackend: auto 有 Codex 就用 Codex，否则用 http。失败不算致命，人物阶段会记录并继续。
+     */
     async generateImage({ prompt, model, size, dir, filename }) {
-      if (!config.imageKey) throw providerError('auth', '没有配置生图 Key（imageKey）');
+      const backend = String(config.imageBackend ?? 'auto');
+      const codexCmd = config.codexCmd || findCodex();
+      const useCodex = backend === 'codex' || (backend === 'auto' && codexCmd);
+      if (useCodex) return codexImage({ prompt, dir, filename, cmd: codexCmd || config.codexCmd });
+      if (!config.imageKey) throw providerError('auth', '没有配置生图 Key（imageKey），也没有可用的 Codex 命令行');
       const base = String(config.imageBaseUrl ?? '').replace(/\/+$/, '');
       if (!base) throw providerError('auth', '没有配置生图端点（imageBaseUrl）');
       const body = Buffer.from(JSON.stringify({ model: model || config.imageModel || 'gpt-image-2', prompt, size: size || config.imageSize || 'auto', n: 1 }), 'utf8');
@@ -451,6 +493,106 @@ export function createVideoEngine({ config = {}, log = () => {} }) {
       return { file, model: model || config.imageModel };
     },
   };
+}
+
+/** 用本机 Codex 的 image_generation 生成一张图，落到目标路径。 */
+async function codexImage({ prompt, dir, filename, cmd }) {
+  const exe = cmd || findCodex();
+  if (!exe) throw providerError('auth', '没找到 Codex 命令行：装好 Codex 桌面版，或配置 codexCmd');
+  if (!existsSync(exe)) throw providerError('auth', `codexCmd 指向的文件不存在：${exe}`);
+  await mkdir(dir, { recursive: true });
+  const target = join(dir, filename || `img_${Date.now()}.png`);
+  const startedAt = Date.now();
+  const instruction = [
+    `用 image_generation 工具生成这张图：${String(prompt ?? '').trim()}`,
+    `生成后把 PNG 复制到 ${target}（覆盖同名文件），确认文件大小 > 10KB，然后只输出这个路径。`,
+    '不要做其它任何事，不要读别的文件。',
+  ].join('\n');
+  await new Promise((resolvePromise, reject) => {
+    // 提示词走 stdin（`-`），不用命令行参数：参数里带换行/中文时 Codex 容易误判成「还要读 stdin」。
+    const child = spawn(exe, ['exec', '--skip-git-repo-check', '-C', dir, '-s', 'workspace-write', '-'], {
+      cwd: dir,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* 已经退出 */
+      }
+      reject(providerError('server', 'Codex 生图超时（14 分钟）'));
+    }, 840_000);
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(providerError('server', `跑不了 Codex（${exe}）：${error.message}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolvePromise(stdout);
+      else reject(providerError('server', `Codex 生图失败（exit ${code}）：${String(stderr || stdout).slice(-400)}`));
+    });
+    child.stdin?.write(instruction);
+    child.stdin?.end();
+  });
+  if (existsSync(target) && readFileStat(target) > 10 * 1024) return { file: target, model: 'codex-image-generation' };
+  // 兜底：Codex 没照抄到目标路径时，从它的生成目录里找这次新出的 PNG。
+  const found = newestCodexImage(startedAt);
+  if (found) {
+    await mkdir(dir, { recursive: true });
+    await writeFile(target, await readFile(found));
+    return { file: target, model: 'codex-image-generation' };
+  }
+  throw providerError('server', 'Codex 没有产出图片：检查 Codex 是否登录、image_generation 是否可用');
+}
+
+function readFileStat(file) {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** 在 ~/.codex/generated_images 下找 startedAt 之后生成的最新 PNG。 */
+function newestCodexImage(startedAt) {
+  const root = join(process.env.USERPROFILE || '', '.codex', 'generated_images');
+  if (!existsSync(root)) return '';
+  let best = '';
+  let bestTime = startedAt - 5_000;
+  try {
+    for (const session of readdirSync(root)) {
+      const dir = join(root, session);
+      for (const name of readdirSync(dir)) {
+        if (!/\.png$/i.test(name)) continue;
+        const file = join(dir, name);
+        const time = statSync(file).mtimeMs;
+        if (time >= bestTime && lookBig(file)) {
+          best = file;
+          bestTime = time;
+        }
+      }
+    }
+  } catch {
+    return best;
+  }
+  return best;
+}
+
+function lookBig(file) {
+  try {
+    return statSync(file).size > 10 * 1024;
+  } catch {
+    return false;
+  }
 }
 
 export { ASPECTS };

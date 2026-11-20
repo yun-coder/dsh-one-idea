@@ -38,6 +38,10 @@
         imageBaseUrl: 'http://127.0.0.1:38650/v1'
         imageKey: ''
         imageModel: 'gpt-image-2'
+        # 生图后端：auto 有 Codex 就用 Codex 的 image_generation，否则走上面的 HTTP 端点
+        imageBackend: 'auto'
+        # Codex 命令行路径；留空自动从 ~/.codex/config.toml 或 WindowsApps 里找
+        codexCmd: ''
         # ---- 剪辑 ----
         ffmpegPath: ''
         bgmDir: ''

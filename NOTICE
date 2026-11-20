@@ -22,3 +22,7 @@ dsh-creative-studio
 
 5. OpenFilm（可选，按其自身许可证）
    成片收尾器；未安装时自动退回 FFmpeg 路径。
+
+6. OpenAI Codex（可选，按其自身条款与额度计费）
+   人物定妆图通过本机 Codex 命令行的 `image_generation` 生成；未安装或未登录时
+   自动退回 HTTP 生图端点。不随包分发。
