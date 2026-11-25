@@ -9,3 +9,5 @@ data/
 machine.json
 secrets.json
 *.local.*
+__pycache__/
+*.pyc

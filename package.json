@@ -1,8 +1,8 @@
 {
   "name": "dsh-one-idea",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
-  "description": "创意工作台：产品画像 + 热点 → 创意 idea → 故事剧情 → 分镜脚本 → 人物六维 → 配音方案 → 出片 → 成片剪辑。生产 Agent、剪辑团队 Agent、审核 Agent 三方协作，质量不过自动打回并通知复核；内置拉片台（爆款拆解 + 逐镜判定 + 复刻分镜）。",
+  "description": "创意工作台：一句话想法或一段剧本 → 导演确认 → 创意 idea → 故事剧情 → 分镜脚本 → 人物六维 → 配音方案 → 出片 → 成片剪辑。生产 Agent、剪辑团队 Agent、审核 Agent 三方协作，质量不过自动打回并通知复核；内置拉片台（爆款拆解 + 逐镜判定 + 复刻分镜）。",
   "keywords": [
     "deepseek",
     "harness",
@@ -26,7 +26,6 @@
     "client.js",
     "engine",
     "tools",
-    "demo",
     "cordis.patch.yml",
     "locale/*.json",
     "docs",
@@ -41,7 +40,7 @@
     "dsh": ">=0.2.1-rc.2"
   },
   "scripts": {
-    "test": "node test/selftest.mjs && node test/panel-smoke.mjs && node test/voice-smoke.mjs",
+    "test": "node test/selftest.mjs && node test/panel-smoke.mjs && node test/panel-api.mjs && node test/intake-api.mjs && node test/reference-api.mjs && node test/voice-smoke.mjs",
     "test:voice": "node test/voice-smoke.mjs",
     "eval": "node test/eval.mjs",
     "doctor": "node test/doctor.mjs",

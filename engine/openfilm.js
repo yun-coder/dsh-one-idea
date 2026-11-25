@@ -12,12 +12,28 @@
  * 这个模块不 import 任何 DSH 包，也不碰 ctx：可以拿两个合成片段脱离 Harness 单测。
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
 /** cp 里给「渲染不确定」这类硬问题的退出码，和 look 的约定一致：0 过、1 有问题、2 用错。 */
 const EXIT_OK = 0;
+
+/** Playwright 的浏览器缓存里有没有 chromium（OpenFilm render 要用）。 */
+function chromiumReady() {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'ms-playwright') : '',
+  ].filter(Boolean);
+  for (const root of roots) {
+    try {
+      if (readdirSync(root).some((name) => /^chromium/i.test(name))) return true;
+    } catch {
+      /* 目录不存在就是没装 */
+    }
+  }
+  return false;
+}
 
 function run(bin, args, { cwd, timeout = 1_800_000, env = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -180,6 +196,9 @@ export function createOpenFilmFinisher({ config = {}, log = () => {}, media = nu
    */
   async function writeFilm(input) {
     const { projectDir, clips, entries, bgm, width, height, captions, filmDir, lines = [] } = input;
+    // 片段是 H3 按提示词生成的，里面本来就带着它自己念的台词；再叠 TTS 就是两个人同时说话。
+    // 有配音轨时把画面自带的声音静音，只留 TTS + BGM。
+    const hasVoiceLines = (Array.isArray(lines) ? lines : []).some((line) => line?.file && existsSync(line.file));
     const fadeEdge = 0.25;
     const tracks = [];
     let at = 0;
@@ -197,7 +216,7 @@ export function createOpenFilmFinisher({ config = {}, log = () => {}, media = nu
       const fade = String(entry.transition ?? 'cut') === 'fade' && length > 0.8;
       const overrides = fade ? ` overrides='[{"fade":[${fadeEdge},${fadeEdge}]}]'` : '';
       tracks.push(
-        `  <video id="s${String(index + 1).padStart(2, '0')}" src="${attr(toSrc(filmDir, local))}${fragment}" at="${fmt(at)}"${overrides}></video>`,
+        `  <video id="s${String(index + 1).padStart(2, '0')}" src="${attr(toSrc(filmDir, local))}${fragment}" at="${fmt(at)}"${hasVoiceLines ? ' muted' : ''}${overrides}></video>`,
       );
       timeline.push({ clip: `s${String(index + 1).padStart(2, '0')}`, file: local, at: Math.round(at * 1000) / 1000, length: Math.round(length * 1000) / 1000, fade });
       at += length;
@@ -238,7 +257,12 @@ export function createOpenFilmFinisher({ config = {}, log = () => {}, media = nu
       const clips = [];
       for (const [index, line] of dialogue.entries()) {
         const local = await localize(line.file, projectDir);
-        const seconds = Number(line.seconds) || 0;
+        let seconds = Number(line.seconds) || 0;
+        // 清单里的 seconds 是四舍五入到两位小数的，可能比音频真实长度多几毫秒；
+        // OpenFilm 的 #t= 不允许越过文件末尾，差 0.004 秒也会整条 render 失败。
+        const info = readProbe ? await readProbe(local).catch(() => null) : null;
+        const actual = Number(info?.duration) || 0;
+        if (actual > 0) seconds = Math.min(seconds > 0 ? seconds : actual, Math.max(0.05, actual - 0.01));
         const volume = Number.isFinite(Number(line.volume)) ? Number(line.volume) : 1;
         const fragment = seconds > 0 ? `#t=0,${fmt(seconds)}` : '';
         clips.push(`  <audio id="vo${String(index + 1).padStart(2, '0')}" src="${attr(toSrc(filmDir, local))}${fragment}" at="${fmt(Math.max(0, Number(line.at)))}" volume="${volume}"></audio>`);
@@ -282,13 +306,19 @@ ${sections.join('\n\n')}
   async function render({ filmDir, finalFile, fps = 30, lufs = -14, workers = 0, scale = 1, timeout = 1_800_000 }) {
     const entry = await available();
     if (!entry.ok) throw new Error(entry.reason);
+    // OpenFilm 的 render 依赖 Playwright 的 chromium-headless-shell；没装时它会在渲染现场
+    // 执行 `playwright install` 下载浏览器，网络一卡就是几十分钟（还看不出在干什么）。
+    // 这里先看浏览器缓存：没有就直接报错，让 auto 策略立刻退回 ffmpeg。
+    if (!chromiumReady()) {
+      throw new Error('OpenFilm 需要 Playwright Chromium，本机没装（渲染时会卡在下载）；这次直接走 ffmpeg。想用 OpenFilm 就先执行一次 playwright install chromium-headless-shell');
+    }
     const args = ['render', '--fps', String(fps), `--loudness=${Number(lufs)}`, '--out', finalFile];
     const parallel = Number(workers) || 0;
     if (parallel > 0) args.push('--workers', String(parallel));
     // 超采样：OpenFilm 按这个像素密度画，输出就是 N 倍宽高（之后由 ffmpeg 降到交付尺寸）。
     if (Number(scale) > 1) args.push('--scale', String(Number(scale)));
     const started = Date.now();
-    const result = await invoke(entry, args, { cwd: filmDir, timeout, env: { OPENFILM_NO_BROWSER: '1' } });
+    const result = await invoke(entry, args, { cwd: filmDir, timeout, env: { OPENFILM_NO_BROWSER: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } });
     const elapsed = Math.round((Date.now() - started) / 1000);
     if (result.code !== EXIT_OK || !existsSync(finalFile)) {
       throw new Error(`openfilm render 失败（退出码 ${result.code}）：${(result.stderr || result.stdout).trim().split('\n').slice(-3).join('；').slice(0, 400)}`);

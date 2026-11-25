@@ -11,14 +11,18 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+
+import { compactMessage } from './errors.js';
 
 const exec = (bin, argv, { timeout = 600_000, env } = {}) =>
   new Promise((resolve, reject) => {
     execFile(bin, argv, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout, env: { ...process.env, ...env } }, (error, stdout, stderr) => {
       if (error) {
-        const detail = `${stdout ?? ''}\n${stderr ?? ''}`.trim().slice(-1200);
-        reject(new Error(`${bin} 执行失败：${error.message}${detail ? `\n${detail}` : ''}`));
+        // 脚本自己会在输出里写中文的下一步（比如抖音要新鲜 cookie）：
+        // 这里只把那几句带回来，别把整段命令行和上游日志塞进项目文件。
+        const detail = compactMessage(`${stdout ?? ''}\n${stderr ?? ''}`, { max: 360 });
+        reject(new Error(`${basename(bin)} 执行失败${detail ? `：${detail}` : `：${error.message}`}`));
         return;
       }
       resolve(String(stdout ?? ''));
@@ -33,6 +37,12 @@ const safeRead = async (file, fallback = null) => {
   }
 };
 
+const clockText = (seconds) => {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(value / 60);
+  return `${String(minutes).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+};
+
 export function createReference({ scriptsDir, nodePath, pythonPath, asrModel = 'medium', log = () => {} }) {
   const node = nodePath || process.execPath || 'node';
   const scripts = {
@@ -45,6 +55,32 @@ export function createReference({ scriptsDir, nodePath, pythonPath, asrModel = '
     scriptsDir,
     available: () => existsSync(scripts.fetch) && existsSync(scripts.frames),
 
+    /**
+     * 长视频先截一段再拆：整片解码（尤其 AV1 1080p）会让切点扫描自己就跑满十分钟。
+     * 直接重编码成 720p H.264，后面的切点/抽帧/转写都只处理这一小段。
+     */
+    async trim({ video, out, start = 0, seconds, ffmpegPath, onStage = () => {} }) {
+      const from = Math.max(0, Number(start) || 0);
+      const length = Number(seconds);
+      if (!Number.isFinite(length) || length <= 0) throw new Error('截取时长必须大于 0 秒');
+      if (!existsSync(video)) throw new Error(`找不到要截取的视频：${video}`);
+      const ffmpeg = ffmpegPath || 'ffmpeg';
+      onStage('trimming', `先截高光段 ${clockText(from)}–${clockText(from + length)}`);
+      // 输入侧 -ss 走索引定位（AV1 也很快），只解码这一段。
+      await exec(ffmpeg, [
+        '-y', '-hide_banner', '-v', 'error',
+        '-ss', String(from), '-i', video, '-t', String(length),
+        // 只降不升：360p 的源不放大到 720p，白花编码时间。
+        '-vf', 'scale=-2:min(720\\,ih)',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22',
+        '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
+        out,
+      ], { timeout: 300_000 });
+      if (!existsSync(out)) throw new Error('截取高光段失败：ffmpeg 没有生成文件');
+      log(`[reference] 已截取高光段 ${clockText(from)}–${clockText(from + length)} → ${out}`);
+      return { file: out, start: from, seconds: length };
+    },
+
     /** 链接 → video.mp4 + meta.json。抖音可能要求新鲜 cookie，失败时把脚本的提示原样带回去。 */
     async fetch({ url, dir, onStage = () => {}, env }) {
       if (!existsSync(scripts.fetch)) throw new Error(`找不到拉片脚本：${scripts.fetch}`);
@@ -52,7 +88,7 @@ export function createReference({ scriptsDir, nodePath, pythonPath, asrModel = '
       const output = await exec(node, [scripts.fetch, String(url), dir], { timeout: 300_000, env });
       const meta = await safeRead(join(dir, 'meta.json'), {});
       const video = join(dir, 'video.mp4');
-      if (!existsSync(video)) throw new Error(`下载完成但没有 video.mp4。脚本输出：${output.slice(-400)}`);
+      if (!existsSync(video)) throw new Error(`下载完成但没有 video.mp4。脚本输出：${compactMessage(output, { max: 200 })}`);
       log(`[reference] 下载完成：${meta.title ?? url}`);
       return { video, meta };
     },

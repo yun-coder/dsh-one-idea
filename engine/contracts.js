@@ -25,7 +25,7 @@ export const VOICE_CATALOG = [
   { id: 'v_f_warm', name: '温软女声', gender: '女', age: '25-30', tone: '轻声、气声多', use: '情绪铺垫、生活流' },
   { id: 'v_f_bright', name: '明亮女声', gender: '女', age: '20-26', tone: '语速偏快、尾音上扬', use: '种草、口播' },
   { id: 'v_f_calm', name: '从容女声', gender: '女', age: '30-38', tone: '低音稳、断句清楚', use: '专业解读、品牌片' },
-  { id: 'v_f_salt', name: '清冷女声', gender: '女', age: '22-30', tone: '平直、少起伏', use: '悬疑、高级感' },
+  { id: 'v_f_salt', name: '温厚女声', gender: '女', age: '35-50', tone: '偏低、稳、少起伏', use: '长辈、夫人、正剧' },
   { id: 'v_f_playful', name: '俏皮女声', gender: '女', age: '18-24', tone: '跳脱、语气词多', use: '搞笑、反转' },
   { id: 'v_m_steady', name: '沉稳男声', gender: '男', age: '30-40', tone: '中低音、慢', use: '叙事、纪录片' },
   { id: 'v_m_bright', name: '清亮男声', gender: '男', age: '22-28', tone: '中高音、干净', use: '科技、数码' },
@@ -202,6 +202,295 @@ export function applyLocks(doc, buildLock) {
     changed += 1;
   }
   return { doc, changed };
+}
+
+/**
+ * 确定性修门：把分镜里「模型算不准」的那几类问题就地修掉，再交给质量门。
+ *   - 台词节拍时长 < 字数/4.5 + 0.3 → 抬到够念（G05）
+ *   - 纯对白镜没有动作拍 → 用这一镜的 action 文案补一个 0.5s 动作拍（G02）
+ *   - 镜长 ≠ 认领节拍合计 → 按合计重算；不足 2s 补到动作拍上（G04）
+ *   - 段落超过 15s → 按镜头顺序重新分段（G04）
+ * 只调结构，不改台词原文、不改动作/光线/机位；改完由 applyLocks 补锁行。
+ */
+export function normalizeStoryboard(doc) {
+  const changes = { kinds: 0, lines: 0, beats: 0, claims: 0, shots: 0, segments: 0, actions: 0 };
+  if (!Array.isArray(doc?.beats) || !Array.isArray(doc?.shots)) return { doc, changes };
+
+  // 0) 节拍 kind 只允许 line / action：模型偶尔写成 reaction、dialogue、镜头 这类词，按有没有说话人归位。
+  for (const beat of doc.beats) {
+    const kind = String(beat?.kind ?? '').trim().toLowerCase();
+    if (kind === 'line' || kind === 'action') continue;
+    const looksLine = Boolean(String(beat?.speaker ?? '').trim())
+      || /line|dialogue|台词|对白/.test(kind)
+      || /^[「“"]/.test(String(beat?.text ?? '').trim());
+    beat.kind = looksLine ? 'line' : 'action';
+    changes.kinds += 1;
+  }
+  // 台词节拍必须有说话人：没有就借认领它的镜头里第一个入画人物。
+  for (const beat of doc.beats) {
+    if (beat.kind !== 'line' || String(beat?.speaker ?? '').trim()) continue;
+    const owner = doc.shots.find((shot) => (shot?.claims ?? []).map(String).includes(String(beat.id)));
+    beat.speaker = String(owner?.inFrame?.[0]?.who ?? '').trim() || '人物';
+    changes.kinds += 1;
+  }
+  const p = { minCutSeconds: 2, maxCutSeconds: 5, maxSegmentSeconds: 15, charsPerSecond: 4.5, ...(doc.params ?? {}) };
+  const round = (value) => Math.round(value * 10) / 10;
+  const ceil = (value) => Math.ceil(value * 10 - 1e-9) / 10;
+  const beatMap = () => new Map(doc.beats.map((beat) => [String(beat?.id ?? ''), beat]));
+
+  // 1) 台词节拍：至少够念完（G05 的估算口径是 字数/4.5 + 0.3）
+  for (const beat of doc.beats) {
+    if (beat?.kind !== 'line') continue;
+    const length = [...String(beat.text ?? '').replace(/\s+/g, '')].length;
+    const need = ceil(length / p.charsPerSecond + 0.3);
+    if (!(Number(beat.durationSec) >= need)) {
+      beat.durationSec = need;
+      changes.lines += 1;
+    }
+  }
+
+  // 2) 纯对白镜：用这一镜已有的 action 文案补一个动作拍，插在它认领的第一拍前面（保持认领连续）
+  const usedIds = new Set(doc.beats.map((beat) => String(beat?.id ?? '')));
+  let serial = 0;
+  for (const shot of doc.shots) {
+    const claims = (Array.isArray(shot?.claims) ? shot.claims : []).map(String);
+    if (claims.length === 0) continue;
+    const map = beatMap();
+    if (claims.some((id) => map.get(id)?.kind === 'action')) continue;
+    const first = map.get(claims[0]);
+    const index = doc.beats.findIndex((beat) => String(beat?.id ?? '') === claims[0]);
+    if (!first || index < 0) continue;
+    let id;
+    do {
+      serial += 1;
+      id = `BX${serial}`;
+    } while (usedIds.has(id));
+    usedIds.add(id);
+    doc.beats.splice(index, 0, {
+      id,
+      scene: first.scene ?? shot.scene,
+      kind: 'action',
+      text: String(shot.action ?? '').trim() || '人物完成这一拍的画面动作',
+      durationSec: 0.5,
+    });
+    shot.claims = [id, ...claims];
+    changes.beats += 1;
+  }
+
+  // 2.5) 有节拍没人认领（模型写了节拍却忘了挂给镜头）：挂到相邻镜头，保持认领连续、同场。
+  const claimOwners = () => new Map(doc.shots.flatMap((shot) => (Array.isArray(shot?.claims) ? shot.claims : [])
+    .map((id) => [String(id), shot])));
+  for (let guard = 0; guard <= doc.beats.length; guard += 1) {
+    const owners = claimOwners();
+    const index = doc.beats.findIndex((beat) => !owners.has(String(beat?.id ?? '')));
+    if (index < 0) break;
+    const beat = doc.beats[index];
+    const prevBeat = doc.beats[index - 1];
+    const nextBeat = doc.beats[index + 1];
+    const prevShot = prevBeat ? owners.get(String(prevBeat.id)) : null;
+    const nextShot = nextBeat ? owners.get(String(nextBeat.id)) : null;
+    const canPrepend = Boolean(nextShot
+      && String((nextShot.claims ?? [])[0] ?? '') === String(nextBeat.id)
+      && String(nextShot.scene ?? '') === String(beat.scene ?? ''));
+    const canAppend = Boolean(prevShot
+      && String((prevShot.claims ?? []).at(-1) ?? '') === String(prevBeat.id)
+      && String(prevShot.scene ?? '') === String(beat.scene ?? ''));
+    // 挂上去之后，把动作拍全压到 0.1 秒时的最短镜长：越小越放得进 5 秒。
+    const minimum = (shot) => {
+      const list = (shot.claims ?? []).map((id) => doc.beats.find((item) => String(item?.id) === String(id))).filter(Boolean);
+      const lines = list.filter((item) => item.kind === 'line').reduce((sum, item) => sum + (Number(item.durationSec) || 0), 0)
+        + (beat.kind === 'line' ? Number(beat.durationSec) || 0 : 0);
+      const actions = list.filter((item) => item.kind === 'action').length + (beat.kind === 'action' ? 1 : 0);
+      return lines + actions * 0.1;
+    };
+    if (canPrepend && (!canAppend || minimum(nextShot) <= minimum(prevShot))) {
+      nextShot.claims = [beat.id, ...nextShot.claims];
+    } else if (canAppend) {
+      prevShot.claims = [...prevShot.claims, beat.id];
+    } else if (canPrepend) {
+      nextShot.claims = [beat.id, ...nextShot.claims];
+    } else {
+      // 两边都不相邻（模型把顺序写乱了）：先挂到同场镜头，让门禁把「不连续」报清楚。
+      const fallback = doc.shots.find((shot) => String(shot.scene ?? '') === String(beat.scene ?? ''));
+      if (!fallback) break;
+      fallback.claims = [...(fallback.claims ?? []), beat.id];
+    }
+    changes.claims += 1;
+  }
+
+  // 2.6) 节拍顺序服从镜头顺序：模型偶尔把后面的拍写在前面，按镜头的认领顺序重排节拍，保证连续、不回退。
+  const orderedBeats = [];
+  const taken = new Set();
+  const keptShots = [];
+  for (const shot of doc.shots) {
+    const kept = [];
+    for (const id of (Array.isArray(shot?.claims) ? shot.claims : []).map(String)) {
+      if (taken.has(id)) continue;
+      const beat = doc.beats.find((item) => String(item?.id ?? '') === id);
+      if (!beat) continue;
+      taken.add(id);
+      orderedBeats.push(beat);
+      kept.push(id);
+    }
+    if (kept.length > 0) {
+      shot.claims = kept;
+      keptShots.push(shot);
+    } else if ((shot?.claims ?? []).length > 0) {
+      changes.shots += 1;
+    }
+  }
+  if (keptShots.length !== doc.shots.length) doc.shots = keptShots;
+  const leftovers = doc.beats.filter((beat) => !taken.has(String(beat?.id ?? '')));
+  if (leftovers.length > 0) {
+    const last = doc.shots.at(-1);
+    if (last) {
+      last.claims = [...(last.claims ?? []), ...leftovers.map((beat) => beat.id)];
+      orderedBeats.push(...leftovers);
+      changes.claims += leftovers.length;
+    }
+  }
+  doc.beats = orderedBeats;
+
+  // 2.7) 动作里的「随后/然后/接着」会让 G13 判一镜多件事，顺手清掉（不动台词）。
+  for (const shot of doc.shots) {
+    const action = String(shot?.action ?? '');
+    const cleaned = action
+      .replace(/[，,]\s*(随后|然后|接着)\s*/g, '，')
+      .replace(/(随后|然后|接着)\s*/g, '')
+      .replace(/[，,]{2,}/g, '，')
+      .trim();
+    if (cleaned && cleaned !== action) {
+      shot.action = cleaned;
+      changes.actions += 1;
+    }
+  }
+
+  // 3) 镜长 = 认领节拍合计；不足 2s 补到动作拍，超 5s 只压注入的动作拍（不动台词）
+  for (const shot of doc.shots) {
+    const map = beatMap();
+    const beats = (Array.isArray(shot?.claims) ? shot.claims : []).map((id) => map.get(String(id))).filter(Boolean);
+    if (beats.length === 0) continue;
+    let sum = beats.reduce((total, beat) => total + (Number(beat.durationSec) || 0), 0);
+    if (sum < p.minCutSeconds) {
+      const action = beats.find((beat) => beat.kind === 'action');
+      if (action) {
+        action.durationSec = round((Number(action.durationSec) || 0) + (p.minCutSeconds - sum));
+        sum = p.minCutSeconds;
+      }
+    }
+    if (sum > p.maxCutSeconds) {
+      // 先把动作拍压短（台词不能压），让这一镜落回 5 秒内；台词本身超 5 秒才真的没救。
+      const actions = beats
+        .filter((beat) => beat.kind === 'action')
+        .sort((a, b) => (Number(b.durationSec) || 0) - (Number(a.durationSec) || 0));
+      for (const beat of actions) {
+        const overflow = round(sum - p.maxCutSeconds);
+        if (overflow <= 0) break;
+        const give = Math.min(Math.max(0, round((Number(beat.durationSec) || 0) - 0.1)), overflow);
+        if (give <= 0) continue;
+        beat.durationSec = round((Number(beat.durationSec) || 0) - give);
+        sum = round(sum - give);
+      }
+    }
+    const duration = Math.min(p.maxCutSeconds, round(sum));
+    if (duration !== Number(shot.durationSec)) {
+      shot.durationSec = duration;
+      changes.shots += 1;
+    }
+  }
+
+  // 4) 段落重建：同场连续、每段 ≤ 15s，且尽量均分（避免切出 2 秒这种上游不接的碎段）
+  const groups = [];
+  for (const shot of doc.shots) {
+    const scene = shot.scene ?? 'S01';
+    if (groups.length === 0 || groups[groups.length - 1].scene !== scene) groups.push({ scene, shots: [] });
+    groups[groups.length - 1].shots.push(shot);
+  }
+  const partition = (values, parts) => {
+    const count = values.length;
+    const k = Math.max(1, Math.min(parts, count));
+    const prefix = [0];
+    for (const value of values) prefix.push(prefix[prefix.length - 1] + value);
+    const range = (from, to) => prefix[to] - prefix[from];
+    const dp = Array.from({ length: k + 1 }, () => Array(count + 1).fill(Number.POSITIVE_INFINITY));
+    const cut = Array.from({ length: k + 1 }, () => Array(count + 1).fill(0));
+    dp[0][0] = 0;
+    for (let part = 1; part <= k; part += 1) {
+      for (let end = 1; end <= count; end += 1) {
+        for (let start = part - 1; start < end; start += 1) {
+          const worst = Math.max(dp[part - 1][start], range(start, end));
+          if (worst < dp[part][end]) {
+            dp[part][end] = worst;
+            cut[part][end] = start;
+          }
+        }
+      }
+    }
+    const bounds = [count];
+    let end = count;
+    for (let part = k; part > 0; part -= 1) {
+      end = cut[part][end];
+      bounds.unshift(end);
+    }
+    return bounds;
+  };
+  let index = 0;
+  for (const group of groups) {
+    const durations = group.shots.map((shot) => Number(shot.durationSec) || 0);
+    const total = durations.reduce((sum, value) => sum + value, 0);
+    let parts = Math.max(1, Math.ceil(total / p.maxSegmentSeconds - 1e-9));
+    let bounds = partition(durations, parts);
+    const worst = (list) => {
+      let value = 0;
+      for (let at = 0; at < list.length - 1; at += 1) {
+        const from = list[at];
+        const to = list[at + 1];
+        value = Math.max(value, durations.slice(from, to).reduce((sum, item) => sum + item, 0));
+      }
+      return value;
+    };
+    // 镜头是不可拆的整数块：按总长算出来的段数不一定能让每段 ≤15s（比如七镜各 4 秒），不够就再加一段。
+    while (worst(bounds) > p.maxSegmentSeconds + 1e-9 && parts < durations.length) {
+      parts += 1;
+      bounds = partition(durations, parts);
+    }
+    for (let part = 0; part < bounds.length - 1; part += 1) {
+      index += 1;
+      const id = `E01-${String(index).padStart(2, '0')}`;
+      for (let at = bounds[part]; at < bounds[part + 1]; at += 1) {
+        if (group.shots[at].segment !== id) {
+          group.shots[at].segment = id;
+          changes.segments += 1;
+        }
+      }
+    }
+  }
+  return { doc, changes };
+}
+
+/**
+ * 长片省字模式：不靠模型写 prompt，按现场表（动作/台词/其他人/视线/末帧）重建。
+ * 模型只要把字段填准，prompt 由这里拼——长片的分镜 JSON 因此能小一半，不会撞输出上限被截断。
+ * 锁行仍由 applyLocks 补，保证 G09/G10 逐字过。
+ */
+export function fillStoryboardPrompts(doc) {  const beats = new Map((Array.isArray(doc?.beats) ? doc.beats : []).map((beat) => [String(beat?.id ?? ''), beat]));
+  let filled = 0;
+  for (const [index, shot] of (Array.isArray(doc?.shots) ? doc.shots : []).entries()) {
+    const lines = (Array.isArray(shot?.claims) ? shot.claims : [])
+      .map((id) => beats.get(String(id)))
+      .filter((beat) => beat && beat.kind === 'line' && String(beat?.text ?? '').trim())
+      .map((beat) => `${beat.speaker ? `${beat.speaker}：` : ''}「${String(beat.text).trim()}」`);
+    const parts = [
+      `镜头${index + 1}：${String(shot?.action ?? '').trim() || '人物在画面内完成这一拍的动作'}`,
+      lines.join(' '),
+      String(shot?.others ?? '').trim() ? `画面其他：${String(shot.others).trim()}` : '',
+      String(shot?.eyeline ?? '').trim() ? `视线：${String(shot.eyeline).trim()}` : '',
+      String(shot?.lastFrame ?? '').trim() ? `结束：${String(shot.lastFrame).trim()}` : '',
+    ].filter(Boolean);
+    shot.prompt = parts.join('。');
+    filled += 1;
+  }
+  return { doc, filled };
 }
 
 /** 分镜局部编辑：改一个镜头（提示词/动作/时长）或一句台词，返回改了几处。 */
@@ -424,6 +713,69 @@ export function gateCharacters(doc, { storyboard = null } = {}) {
 // ---------------------------------------------------------------------------
 // 阶段五：配音方案
 // ---------------------------------------------------------------------------
+/**
+ * 配音方案的确定性修门：年龄对不上、两个人撞同一个音色，在这里改掉，再交给门禁和审核。
+ *   - 40 岁以上 / 夫人·公·婆·嬷嬷 → 不许用少女/少男音色，改成同性别长辈音色并压低 pitch；
+ *   - 同性别撞同一个 voiceId → 换一个同性别还没人用的音色；
+ *   - 台词里的 voiceId 跟着人物走。
+ * 只改音色分配与 pitch，不改台词、情绪和 BGM。
+ */
+export function normalizeVoicePlan(doc, { story = null } = {}) {
+  const changes = { age: 0, clash: 0 };
+  const characters = Array.isArray(doc?.characters) ? doc.characters : [];
+  const storyCharacters = new Map((Array.isArray(story?.characters) ? story.characters : [])
+    .map((character) => [String(character?.name ?? ''), character]));
+  const youngFemale = new Set(['v_f_bright', 'v_f_playful']);
+  const youngMale = new Set(['v_m_young', 'v_m_bright']);
+  const elderNames = /(夫人|老爷|嬷嬷|婆婆|老夫|老太|公$|母$|婆$)/;
+  const isFemale = (voiceId) => /^v_f_/.test(String(voiceId ?? ''));
+
+  for (const character of characters) {
+    const fromStory = storyCharacters.get(String(character?.name ?? ''));
+    const ageText = String(fromStory?.age ?? '');
+    const numbers = (ageText.match(/\d+/g) ?? []).map(Number);
+    const age = numbers.length > 0 ? Math.max(...numbers) : 0;
+    const elder = age >= 40
+      || elderNames.test(String(character?.name ?? ''))
+      || elderNames.test(String(character?.role ?? fromStory?.role ?? ''));
+    if (!elder) continue;
+    const voiceId = String(character?.voiceId ?? '');
+    if (isFemale(voiceId) ? youngFemale.has(voiceId) : youngMale.has(voiceId)) {
+      character.voiceId = isFemale(voiceId) ? 'v_f_salt' : 'v_m_steady';
+      character.pitch = '偏低';
+      changes.age += 1;
+      continue;
+    }
+    // 长辈即使音色对了，也把音高压低：同一个后端音色靠 pitch 才能听出年龄差。
+    if (elder && !/偏低/.test(String(character?.pitch ?? ''))) {
+      character.pitch = '偏低';
+      changes.age += 1;
+    }
+  }
+
+  const used = new Set();
+  const femalePool = ['v_f_calm', 'v_f_salt', 'v_f_bright', 'v_f_playful', 'v_f_warm'];
+  const malePool = ['v_m_steady', 'v_m_rough', 'v_m_young', 'v_m_bright', 'v_m_anchor', 'v_c_elder'];
+  for (const character of characters) {
+    const voiceId = String(character?.voiceId ?? '');
+    if (!used.has(voiceId)) {
+      used.add(voiceId);
+      continue;
+    }
+    const next = (isFemale(voiceId) ? femalePool : malePool).find((id) => !used.has(id));
+    if (!next) continue;
+    character.voiceId = next;
+    used.add(next);
+    changes.clash += 1;
+  }
+
+  for (const line of Array.isArray(doc?.lines) ? doc.lines : []) {
+    const owner = characters.find((character) => String(character?.name ?? '') === String(line?.speaker ?? ''));
+    if (owner && line.voiceId !== owner.voiceId) line.voiceId = owner.voiceId;
+  }
+  return { doc, changes };
+}
+
 export function gateVoice(doc, { storyboard = null, characters = null } = {}) {
   const failures = [];
   const lines = asArray(doc?.lines);

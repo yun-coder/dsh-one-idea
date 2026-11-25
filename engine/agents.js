@@ -69,6 +69,26 @@ const hotspotBlock = (project) => {
   ].join('\n');
 };
 
+/**
+ * 用户塞进来的原始素材（一句话想法 / 整段剧本）。
+ * 它是最高依据：默认写法与它冲突时，以它为准。
+ */
+const sourceBlock = (project, stage = '') => {
+  const source = project?.source;
+  if (!source?.text) return '';
+  // 只有「要读原文」的阶段才带全文：人物/配音读的是分镜，不需要再塞一遍剧本。
+  if (!['idea', 'story', 'storyboard'].includes(String(stage))) return '';
+  const script = source.kind === 'script';
+  const limit = script ? 14000 : 2400;
+  return [
+    `---- 用户已给的${script ? '剧本' : '想法'}（最高依据） ----`,
+    script
+      ? '这是一整段可拍的剧本：按它的场次、台词原文和结尾拍。不要重写剧情、不要换台词、不要另加人物；只补足拍摄需要的信息。'
+      : '这是用户亲口说的想法：沿着它做，不要另起炉灶；缺的信息按下面的画像补，不要编造事实。',
+    String(source.text).slice(0, limit),
+  ].join('\n');
+};
+
 const issuesBlock = (issues) => {
   const list = (issues ?? []).map((issue) => text(issue)).filter(Boolean);
   if (list.length === 0) return '';
@@ -120,6 +140,21 @@ const PRODUCER_IDENTITY = [
   '4. 台词口语化，单句 ≤ 18 字；不要旁白腔，不要用台词解释情绪。',
   '5. 每一条都要能拍、能生成：具体到动作、光线、机位、道具、颜色。',
   '6. 禁用空话词：电影感、高级感、大片感、超写实、杰作、获奖、4k、8k、脸沉下来、嘴角勾起、五味杂陈、气氛凝固。',
+].join('\n');
+
+const INTAKE_IDENTITY = [
+  '你是「创意工作台」的导演（Director）。',
+  '用户只丢来一句话想法，或一整段剧本，不会填表。你要先读懂它，然后决定这条片子怎么拍。',
+  '',
+  '工作的顺序是：',
+  '1. 能从素材里推断的，直接填进画像（产品/作品名、品类、人群、卖点、调性、时长、平台、制作类型）。',
+  '2. 只把真正影响成片、而且你确实猜不准的问题留给用户，最多 4 个；能不问就不问。',
+  '3. 每个问题都必须带一个你推荐的默认答案，用户可以直接采纳；问题要具体到能一句话回答。',
+  '',
+  '不要问这些空话：「你想要什么风格」「目标受众是谁」「有什么卖点」——能从素材读出来的自己填。',
+  '该问的是会改变拍法的分叉，例如：这条是做 15 秒钩子还是 45 秒完整故事、结尾要不要挂产品、台词能不能改、是给到店体验还是只拍产品特写。',
+  '',
+  '只输出一个 JSON 对象，不要 Markdown 围栏，不要解释。',
 ].join('\n');
 
 const STORYBOARD_RULES = [
@@ -204,6 +239,9 @@ const STAGE_TASKS = {
     `- 全片 ${project?.targetSeconds ?? 45} 秒，方向要撑得住这个时长，也要塞得进这个时长。`,
     '- 如果给了「参考爆款」的拆解报告：至少一个方向要借用它验证过的结构（几段式、钩子设计、信息点间隔），',
     '  但人物、场景、台词、产品必须换掉，并在 risk 里写清同质化风险。',
+    project?.source?.kind === 'script'
+      ? '- **剧本模式**：用户已经给了完整剧本，不要另起三个故事。把同一份剧本拆成三个不同的剪法/侧重（例如按原顺序、把结尾前置、只留一条线），推荐最忠于原剧本的那一个；台词不改。'
+      : '',
   ].join('\n'),
 
   story: (project) => [
@@ -232,12 +270,19 @@ const STAGE_TASKS = {
     '- 不要旁白解释情绪；情绪靠动作和台词。',
     '- **可理解性（硬要求）**：不看标题、不看简介，只凭片子也要能看懂三件事——① 冲突从哪来（premise 要变成片头第一句台词或第一个明确的画面证据）；② 发生了什么（发现/反转）；③ 最后怎么收（punchline 必须真的说出来或演出来）。',
     '- 第一拍就要把前提立住：允许用一句画外台词交代（例如「我妈收拾完，我的拖鞋就不见了」），不要只靠画面猜。',
+    project?.source?.kind === 'script'
+      ? '- **剧本模式（硬要求）**：用户给了完整剧本。按剧本的场次顺序、台词原文、结尾原样整理成下面的结构：premise 与 punchline 从剧本原句里取，不许另写剧情、不许增删人物、不许改台词；只补足能拍的动作与画面。'
+      : '',
   ].join('\n'),
 
-  storyboard: (project) => [
+  storyboard: (project) => {
+    const long = Number(project?.targetSeconds) > 60;
+    // 长片：把 schema 示例里的 prompt 字段拿掉，免得模型照着示例写长 prompt 把输出撑爆。
+    const rules = long ? STORYBOARD_RULES.replace(', "prompt": ""', '') : STORYBOARD_RULES;
+    return [
     '目标：把故事写成一份能直接下单生成的分镜，必须一次通过 13 道门。',
     '',
-    STORYBOARD_RULES,
+    rules,
     `本片 targetSeconds 必须为 ${project?.targetSeconds ?? 45}，先分配每段和每镜的秒数，再逐镜填写。`,
     '',
     '## 可拍性红线（审核 Agent 会逐条挑这些毛病）',
@@ -252,7 +297,19 @@ const STAGE_TASKS = {
     `- 一个 segment 就是一次生成任务，合计时长必须在 ${MIN_SEGMENT_SECONDS}–${MAX_SEGMENT_SECONDS} 秒之间（推荐 8–15 秒）。`,
     '- 段号按顺序编号：E01-01、E01-02、E02-01……换场换前缀。',
     '- 同一段内的镜头要能接成一条连续的片子：落点与入口对得上，光线方向不变。',
-  ].join('\n'),
+    Number(project?.targetSeconds) > 60
+      ? [
+        '',
+        '## 长片省字模式（本片超过 60 秒，硬要求）',
+        '- **输出紧凑 JSON**：不要缩进、不要换行美化（字符串内部照常转义），能省掉一大截输出。',
+        '- **不要输出 shots[].prompt 字段**：写了也会被丢弃，插件会按 action / 台词 / others / eyeline / lastFrame 与现场表重建提示词并补锁行。',
+        '- 字段要填准填短：action 一句话（≤ 40 字），others / eyeline / lastFrame / light 各一句，不要扩写环境描写。',
+        `- 镜头总数控制在 ${Math.max(1, Math.ceil(Number(project?.targetSeconds ?? 60) / 4))} 个以内（目标时长 ÷ 4 秒）；宁可每镜 4–5 秒，不要拆成一堆 2 秒碎镜，输出会爆。`,
+        '- 仍然要保证：每个节拍被某一镜认领、台词逐字来自 beats、inFrame 与机位写清（这些会进重建的提示词）。',
+      ].join('\n')
+      : '',
+  ].join('\n');
+  },
 
   characters: () => [
     '目标：给分镜里每一个出场人物写「六维形象档案」和一条能直接出定妆图的提示词。',
@@ -299,6 +356,10 @@ const STAGE_TASKS = {
     '- lines 必须一一覆盖分镜里的每一句台词：beatId 对应、text 逐字照抄、不许合并也不许多出。',
     '- 每个说话人都要在 characters 里有音色；同一个人全片用同一个 voiceId。',
     '- 音色要跟人物六维的气质对得上；两个人物不要用同一个音色（除非剧情要求）。',
+    '- 音色年龄必须贴人物年龄：40 岁以上只能用 v_f_calm / v_f_salt（温厚 35–50）/ v_m_steady / v_m_rough / v_c_elder；禁止把 v_f_bright / v_f_playful / v_m_young 给长辈。',
+    '- 女性长辈（夫人/母亲/婆/嬷嬷）优先 v_f_salt（温厚 35–50）；v_f_bright / v_f_playful 只给年轻角色。',
+    '- pitch 按年龄与身份填：长辈、上位者「偏低」，少女/少年「偏高」，其余「中性」——同一个后端音色靠 pitch 再拉开，别让两个人物听起来像同一个人。',
+    '- 同性别角色不要共用同一个 voiceId；女声只有 5 个时优先保证主要角色互不撞音色。',
     '- BGM 只写情绪与编制（如「低保真钢琴 + 雨声」），不要写具体版权曲名。',
   ].join('\n'),
 };
@@ -361,15 +422,31 @@ const STAGE_LABEL = {
 const REVIEW_FOCUS = {
   idea: '钩子是不是画面上真能发生的事、三个方向是不是真的不同、每条是否真的挂到了给定热点、可拍性与目标人群是否对得上。',
   story: '三幕是否闭合（钩子→转折→落点）、节拍是否都能拍出来、人物动机与冲突是否成立、节拍合计是否撑得住目标时长；**以及不看标题能不能看懂：冲突从哪来、发生了什么、最后怎么收的**——三件事缺一件就是 blocker。',
-  storyboard: '可拍性：一镜是否只做一件事、走位是否单独成镜、机位是否与运镜自洽（写固定就不能横移）、道具是否有来处、动作点数量与时长是否匹配、同段内光线与人物位置是否连贯。',
+  storyboard: '可拍性：一镜是否只做一件事、走位是否单独成镜、机位是否与运镜自洽（写固定就不能横移）、道具是否有来处、动作点数量与时长是否匹配、同段内光线与人物位置是否连贯。'
+    + '注意：shot-contract 要求每镜至少认领一个动作节拍，所以「一个身体动作 + 一句台词同镜」是正常形态，不算一镜两件事；'
+    + '「开口说台词 / 嘴唇轻动 / 说完一句」不算第二个动作，不要因此判 blocker。只有两个以上身体动作、或走位/位移 + 动作挤在同一镜，才算超载。'
+    + '另外：单镜下限 2 秒、上限 5 秒，不要建议拆出 0.5–1 秒的镜头（门禁不接）。',
   characters: '六维是否具体到能画出来（颜色/材质/形状/数量）、同一个人物的六个维度是否自洽、定妆提示词与六维是否一致、人物是否服务于这个故事。',
   voice: '音色是否贴合人物气质、有没有两个人物撞音色、BGM 情绪与编制是否匹配、每句台词的情绪标注是否合理、语速与台词长度是否匹配。',
   edit: '这条片子从钩子到落点是否成立、剪辑顺序与节奏是否比原顺序更好、声音是否平衡、发布包（标题/文案/话题）是否合规可发。',
 };
 
+/**
+ * 面板「提示词模板」用：把内置指令原样交出去。
+ * 之前面板只显示自己写的那段（空的），看起来像「这个功能没用」——其实它一直生效，
+ * 只是没让人看见它到底追加在什么后面。
+ */
+export function builtinPrompt(name) {
+  const stageTask = STAGE_TASKS[name];
+  if (typeof stageTask === 'function') return stageTask({ targetSeconds: 45, brief: {} });
+  if (name === 'edit') return EDITOR_IDENTITY;
+  if (name === 'reviewer') return `${REVIEWER_IDENTITY}\n\n审核重点：${REVIEW_FOCUS.reviewer ?? ''}`;
+  return '';
+}
+
 export function createAgents({ callModel, config = {} }) {
   /**
-   * 阶段指令可外置：<promptsDir>/<stage>.md 存在时替换内置任务描述（idea/story/storyboard/characters/voice/edit），
+   * 阶段指令可外置：<promptsDir>/<stage>.md 存在时追加到内置任务描述后面；
    * reviewer.md 追加到审核重点后面。每次都读文件，改完下一阶段就生效。
    */
   const promptOverride = (name) => {
@@ -409,26 +486,80 @@ export function createAgents({ callModel, config = {} }) {
       try {
         return extractJson(raw);
       } catch (err) {
-        lastError = err;
+        // 把原始输出挂到错误上：宿主可以落盘，下一次失败就能看到到底断在哪。
+        lastError = Object.assign(err instanceof Error ? err : new Error(String(err)), { raw });
       }
     }
-    throw new Error(`${label ?? '模型'}没有给出可用 JSON：${lastError?.message ?? '未知原因'}`);
+    const raw = String(lastError?.raw ?? '');
+    const cutOff = raw.trim().length > 0 && !raw.trim().endsWith('}');
+    const error = new Error(`${label ?? '模型'}没有给出可用 JSON：${lastError?.message ?? '未知原因'}${cutOff ? `（输出 ${raw.length} 字、末尾不是 }，像是被输出上限截断）` : ''}`);
+    error.raw = raw;
+    throw error;
   };
 
   return {
+    /**
+     * 导演：读懂用户的想法/剧本，把能填的画像填掉，只留下最多 4 个真正影响拍法的问题。
+     * 服务端负责把 brief 合并进项目、把 questions 交给面板或宿主逐个确认。
+     */
+    async intake({ project, signal }) {
+      const source = project?.source;
+      if (!source?.text) throw new Error('这个项目还没有想法或剧本：先给一句话，或直接把剧本贴进来');
+      const script = source.kind === 'script';
+      const user = [
+        `用户给的${script ? '剧本' : '想法'}（最高依据，原文）：`,
+        String(source.text).slice(0, 14000),
+        '',
+        '当前已有的画像（可能大部分为空，能补就补）：',
+        briefBlock(project),
+        '',
+        '可选字段（field 只能取这些值）：',
+        '- productName 产品名/作品名；category 品类；audience 目标人群；tone 调性；priceBand 价格带；',
+        '- sellingPoints 卖点（数组，每条一句话）；forbidden 禁用词（数组）；extra 其他补充；',
+        '- projectMode：promotion（推广片）或 story（剧情短片）；audioMode：dialogue（有台词）或 no-dialogue（无台词）；',
+        '- targetSeconds：整数秒 10–180；platform：douyin / shipinhao / xiaohongshu / bilibili；aspect：9:16 / 16:9 / 1:1。',
+        '',
+        '输出 JSON：',
+        '{',
+        '  "summary": "一句话复述：我理解你要拍的是……（≤ 60 字，说人话）",',
+        '  "title": "片名（≤ 16 字）",',
+        '  "kind": "idea | script",',
+        '  "brief": { "productName": "", "category": "", "audience": "", "sellingPoints": [], "tone": "", "priceBand": "", "projectMode": "promotion", "audioMode": "dialogue", "extra": "" },',
+        '  "questions": [',
+        '    { "field": "targetSeconds", "question": "这条想做多长？", "why": "决定分几段、几个信息点",',
+        '      "options": [{ "label": "15 秒 · 一个钩子", "value": "15" }, { "label": "45 秒 · 完整故事", "value": "45" }],',
+        '      "default": "45" }',
+        '  ]',
+        '}',
+        '',
+        '规则：',
+        '- summary 要让用户一眼看出你读懂了没有；读不准就直说哪里不确定，并在 questions 里问。',
+        '- brief 里能推断的都要填满；推断不出就留空，不要编造具体数字、门店、价格。',
+        script
+          ? '- 这是剧本：kind 填 "script"；问题最多 2 个（通常只问时长/平台/台词能不能微调）；剧情已经定了，不要问走向。'
+          : '- 这是想法：问题最多 3 个；优先问「拍多长」「要不要台词」「重点是产品还是人」。',
+        '- questions 可以是空数组：素材已经说清就别硬凑问题。',
+        '- 每个 question 必须给 default；有 options 时 default 必须是其中一个 value；没有 options 时 default 写你推荐的文本。',
+        '- 不要问禁用词这种运营侧细节，也别把已经能填的画像再问一遍。',
+      ].join('\n');
+      return askJson({ system: INTAKE_IDENTITY, user, temperature: 0.3, signal, label: '导演' });
+    },
+
     /** 生产 Agent：跑 idea / story / storyboard / characters / voice。 */
     async produce({ stage, project, context = {}, issues = [], directive = '', signal }) {
       const task = STAGE_TASKS[stage];
       if (!task) throw new Error(`生产 Agent 不负责阶段 ${stage}`);
+      const custom = promptOverride(stage);
       const user = [
         briefBlock(project),
         '',
         hotspotBlock(project),
+        sourceBlock(project, stage),
         priorBlock(context),
         '',
         task(project),
-        promptOverride(stage)
-          ? `${promptOverride(stage)}\n（与上面的默认写法冲突时以这一段为准；但 JSON 结构与门禁要求不能破）`
+        custom
+          ? `${custom}\n（与上面的默认写法冲突时以这一段为准；但 JSON 结构与门禁要求不能破）`
           : '',
         project?.brief?.audioMode === 'no-dialogue'
           ? '本片为无对白模式：用动作和环境声交代前提、转折和结尾。punchline 是结尾动作，原文纳入 ending。所有分镜节拍使用 action，提示词只写非语言音效，配音清单 lines 与 characters 留空。'
@@ -529,6 +660,30 @@ export function createAgents({ callModel, config = {} }) {
         order.push({ segmentId: id, trimStart: 0, trimEnd: null, transition: 'cut', transitionSec: 0.25, reason: '补齐：上一版漏了这一段' });
       }
       edl.order = order;
+
+      // 叙事顺序守卫：模型常把「后面某段」提前当过渡（例如把喊吉时那段插到第二），
+      // 结果故事时空来回跳、看着没头没尾。允许的唯一例外是把某段截到 ≤2 秒当片头钩子；
+      // 其余情况一律按分镜顺序排回去（trim/transition 跟着段走，不丢）。
+      {
+        const natural = validIds;
+        const ids = order.map((entry) => entry.segmentId);
+        const chrono = (list) => list.every((id, index) => index === 0 || natural.indexOf(id) > natural.indexOf(list[index - 1]));
+        if (!chrono(ids)) {
+          const hook = order[0];
+          const rest = ids.slice(1);
+          const restNatural = natural.filter((id) => id !== hook.segmentId);
+          const hookStart = Math.max(0, Number(hook.trimStart) || 0);
+          const hookEnd = hook.trimEnd === null || hook.trimEnd === undefined ? null : Number(hook.trimEnd);
+          const hookShort = hookEnd !== null && hookEnd - hookStart <= 2.2;
+          const allowed = hookShort && rest.join('|') === restNatural.join('|');
+          if (!allowed) {
+            const byId = new Map(order.map((entry) => [entry.segmentId, entry]));
+            edl.order = natural.map((id) => byId.get(id));
+            edl.orderFixed = true;
+            edl.rationale = `${edl.rationale ?? ''}（宿主修正：为保持叙事顺序，已按分镜段序重排；只有 ≤2 秒的片头钩子允许前置）`.trim();
+          }
+        }
+      }
 
       // 总时长对账：模型算不准，这里按真实可用时长把总长压回目标 ±8%（只压不拉，不能凭空造镜头）。
       const target = Number(project?.targetSeconds) || 0;
@@ -708,7 +863,8 @@ export function createAgents({ callModel, config = {} }) {
           : []),
         '',
         '待审产物：',
-        JSON.stringify(artifact, null, 2).slice(0, 24000),
+        // 分镜很长：24k 字符会把后半条片子截掉，审核只能看到一半，分数自然低。
+        JSON.stringify(artifact, null, 2).slice(0, stage === 'storyboard' ? 60_000 : 24_000),
         '',
         '打分五维（每维 0–20，合计 100）：',
         '1) hook 钩子力：前 3 秒能不能让人停下',
@@ -730,6 +886,8 @@ export function createAgents({ callModel, config = {} }) {
         '',
         '规则：',
         `- 有 blocker 或总分 < ${threshold} 时 verdict 必须是 rework。`,
+        '- **blocker 只用于两种**：① 确定性门禁失败项；② 合规 / 版权 / 安全问题。',
+        '- 拆镜、机位、走位、道具连续性、动作密度这类工艺问题最高写 major（可以给改法），不要判 blocker——门禁已经保证了结构，工艺偏好不该让它无限重做。',
         '- 每条 issue 都要有 where 和 fix；没有具体位置的意见不要写。',
         '- 不要为了显得严格而编造问题，也不要放过结构塌了的地方。',
       ].join('\n');

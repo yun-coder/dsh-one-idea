@@ -21,6 +21,8 @@
   "skillDir": "",
   "scriptsDir": "",
   "reaVideoCmd": "",
+  "referenceMaxSeconds": 120,
+  "referenceStartSeconds": 0,
   "openfilmCmd": "",
   "reviewPolicy": "balanced"
 }

@@ -5,27 +5,29 @@
  * 覆盖：门禁契约（含 shot-contract 真实样例）、分镜切段、JSON 提取、项目仓库、
  * 以及 ffmpeg 剪辑管线（用合成片段跑一遍归一/拼接/混音/抽帧）。
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import {
   GATES,
   gateIdea, gateStory, gateStoryboard, gateCharacters, gateVoice, gateEdit,
   loadShotContract, segmentsOf, dialogueOf, SIX_DIMENSIONS, patchStoryboard,
+  applyLocks, fillStoryboardPrompts, normalizeStoryboard, normalizeVoicePlan,
 } from '../engine/contracts.js';
 import { extractJson } from '../engine/agents.js';
-import { createAgents } from '../engine/agents.js';
+import { createAgents, builtinPrompt } from '../engine/agents.js';
 import { resolveConfig } from '../engine/config.js';
 import { runDoctor } from '../engine/doctor.js';
-import { materializeDemo } from '../engine/demo.js';
 import { readWorkbenchImage } from '../engine/image-workbench.js';
 import { platformOf, checkPlatform, platformBrief } from '../engine/platform.js';
 import { glyphFraction, overlapScore, verdictOf, sampleTimes, detectBurnedCaptions } from '../engine/burned-captions.js';
 import { matchesStamp, promptLayerFingerprint } from '../engine/fingerprint.js';
 import { createStore, newProject, event } from '../engine/store.js';
+import { normalizeIntakeResult, applyIntakeAnswer, pickReferenceWindow, parseReferenceWindowInput, silentPerformancePrompt } from '../index.js';
+import { compactMessage, friendlyError } from '../engine/errors.js';
+import { createTraces } from '../engine/traces.js';
 import { createMedia } from '../engine/media.js';
 
 const ffmpegPath = process.env.FFMPEG_PATH || 'C:\\Users\\dsh\\AppData\\Local\\EaselTools\\ffmpeg\\ffmpeg-9.0.2-essentials_build\\bin\\ffmpeg.exe';
@@ -50,6 +52,146 @@ const shotContract = await loadShotContract(skillDir);
 const sampleGate = gateStoryboard(sample, { targetSeconds: 15 }, shotContract);
 check('样例过 13 道门', sampleGate.gates.every((gate) => gate.failures.length === 0), JSON.stringify(sampleGate.gates.filter((gate) => gate.failures.length).slice(0, 2)));
 check('附加门也过', sampleGate.ok, (sampleGate.failures ?? []).slice(0, 3).join(' / '));
+
+// 长片省字：模型不写 prompt，按现场表重建后仍要过同样的门（G09 锁行、G10 台词逐字、提示词 ≥60 字）。
+const compact = JSON.parse(JSON.stringify(sample));
+for (const shot of compact.shots) shot.prompt = '';
+fillStoryboardPrompts(compact);
+applyLocks(compact, shotContract.buildLock);
+const compactGate = gateStoryboard(compact, { targetSeconds: 15 }, shotContract);
+check('省字模式重建的提示词过 13 道门', compactGate.ok, (compactGate.failures ?? []).slice(0, 3).join(' / '));
+check('重建的提示词包含台词原文', compact.shots.every((shot) => (shot.claims ?? [])
+  .map((id) => sample.beats.find((beat) => beat.id === id))
+  .filter((beat) => beat?.kind === 'line')
+  .every((beat) => shot.prompt.includes(beat.text))));
+check('重建的提示词都够长', compact.shots.every((shot) => shot.prompt.length >= 60), compact.shots.map((shot) => shot.prompt.length).join(','));
+
+// 确定性修门：台词太短、纯对白镜、镜长对不上、段落超 15 秒，修完应该过门。
+{
+  const shot = (id, claims, durationSec, action, side = '门外正对门') => ({
+    id, segment: 'E01-01', scene: 'S01', kind: 'action', durationSec, claims,
+    camera: { side, size: '中近景' },
+    inFrame: [{ who: '甲', pos: '门内', facing: '朝门外' }],
+    eyeline: '看向门外', action, others: '门环轻晃', light: '门缝冷光',
+    lastFrame: '甲的手停在门环上', prompt: '',
+  });
+  const brokenBoard = {
+    title: '修门测试',
+    targetSeconds: 8,
+    floorPlan: '门内门外',
+    scenes: [{ id: 'S01', location: '门内', light: '冷光' }],
+    beats: [
+      { id: 'B01', scene: 'S01', kind: 'action', text: '抬手', durationSec: 2 },
+      { id: 'B02', scene: 'S01', kind: 'line', speaker: '甲', text: '这门亲事我不认，您请回吧', durationSec: 2 },
+      { id: 'B03', scene: 'S01', kind: 'line', speaker: '乙', text: '好。', durationSec: 2 },
+    ],
+    shots: [
+      shot('E01-01-01', ['B01'], 2, '抬手推门'),
+      shot('E01-01-02', ['B02'], 2, '甲压低声音说'),
+      shot('E01-01-03', ['B03'], 2, '乙点头'),
+    ],
+  };
+  const fixed = normalizeStoryboard(brokenBoard);
+  fillStoryboardPrompts(fixed.doc);
+  applyLocks(fixed.doc, shotContract.buildLock);
+  const fixedGate = gateStoryboard(fixed.doc, { targetSeconds: 8 }, shotContract);
+  check('修门后纯对白镜有了动作拍', brokenBoard.beats.some((beat) => beat.id === 'BX1'));
+  check('修门后台词节拍够念', brokenBoard.beats.find((beat) => beat.id === 'B02').durationSec >= 3);
+  check('修门后镜长等于节拍合计', brokenBoard.shots.every((item) => {
+    const sum = item.claims.map((id) => brokenBoard.beats.find((beat) => beat.id === id).durationSec).reduce((a, b) => a + b, 0);
+    return Math.abs(sum - item.durationSec) < 1e-6;
+  }));
+  check('修门后过 13 道门', fixedGate.ok, (fixedGate.failures ?? []).slice(0, 3).join(' / '));
+
+  // 动作 + 台词超 5 秒：不能压台词，只能压动作拍。
+  const overShot = {
+    title: '超长镜', targetSeconds: 5,
+    scenes: [{ id: 'S01' }],
+    beats: [
+      { id: 'A1', scene: 'S01', kind: 'action', text: '推门', durationSec: 3 },
+      { id: 'L1', scene: 'S01', kind: 'line', speaker: '甲', text: '我回来了', durationSec: 3 },
+    ],
+    shots: [{
+      id: 'E01-01-01', segment: 'E01-01', scene: 'S01', kind: 'action', durationSec: 6, claims: ['A1', 'L1'],
+      camera: { side: '门内', size: '中景' }, inFrame: [{ who: '甲', pos: '门口', facing: '朝内' }],
+      eyeline: '看门内', action: '推门进来', others: '无', light: '暖光', lastFrame: '门开一半', prompt: '',
+    }],
+  };
+  normalizeStoryboard(overShot);
+  check('超 5 秒时压动作不压台词', overShot.shots[0].durationSec <= 5 && overShot.beats[1].durationSec === 3, JSON.stringify({ d: overShot.shots[0].durationSec, line: overShot.beats[1].durationSec }));
+
+  // 动作已经压到 0.1 秒下限、合计还多 0.1 秒：镜长收在上限，节拍合计差 0.1 在门禁 ±0.5 容差内。
+  const edgeShot = {
+    title: '零头', targetSeconds: 5, scenes: [{ id: 'S01' }],
+    beats: [
+      { id: 'A1', scene: 'S01', kind: 'action', text: '抬手', durationSec: 0.1 },
+      { id: 'L1', scene: 'S01', kind: 'line', speaker: '甲', text: '这门亲事我不认您请回吧明日再说也不成我意啊', durationSec: 1 },
+    ],
+    shots: [{
+      id: 'E01-01-01', segment: 'E01-01', scene: 'S01', kind: 'action', durationSec: 5.1, claims: ['A1', 'L1'],
+      camera: { side: '门内', size: '中景' }, inFrame: [{ who: '甲', pos: '门口', facing: '朝内' }],
+      eyeline: '看门内', action: '抬手', others: '无', light: '暖光', lastFrame: '手停', prompt: '',
+    }],
+  };
+  normalizeStoryboard(edgeShot);
+  check('压不动的 0.1 秒由镜长上限吸收', edgeShot.shots[0].durationSec === 5 && edgeShot.beats[1].durationSec === 5, JSON.stringify({ d: edgeShot.shots[0].durationSec, line: edgeShot.beats[1].durationSec }));
+
+  // 七个 4 秒镜共 28 秒：两段怎么分都有一段 ≥16 秒，必须切成三段。
+  const many = {
+    title: '分段', targetSeconds: 28, scenes: [{ id: 'S01' }],
+    beats: Array.from({ length: 7 }, (_, i) => ({ id: `A${i + 1}`, scene: 'S01', kind: 'action', text: '动作', durationSec: 4 })),
+    shots: Array.from({ length: 7 }, (_, i) => ({
+      id: `E01-01-0${i + 1}`, segment: 'E01-01', scene: 'S01', kind: 'action', durationSec: 4, claims: [`A${i + 1}`],
+      camera: { side: '院内', size: '全景' }, inFrame: [{ who: '甲', pos: '院中', facing: '朝门' }],
+      eyeline: '看门', action: '站着', others: '无', light: '日光', lastFrame: '不动', prompt: '',
+    })),
+  };
+  normalizeStoryboard(many);
+  const manySegs = segmentsOf(many);
+  check('段长卡不住时会自动多切一段', manySegs.length >= 3 && manySegs.every((seg) => seg.seconds <= 15), manySegs.map((seg) => `${seg.id}=${seg.seconds}`).join(','));
+
+  // 镜头把后面的拍写在前面 + 动作里带「随后」：修门要重排节拍、清掉连词。
+  const outOfOrder = {
+    title: '顺序', targetSeconds: 6, scenes: [{ id: 'S01' }],
+    beats: [
+      { id: 'A1', scene: 'S01', kind: 'action', text: '抬手', durationSec: 2 },
+      { id: 'L1', scene: 'S01', kind: 'line', speaker: '甲', text: '走吧', durationSec: 1 },
+      { id: 'A2', scene: 'S01', kind: 'action', text: '转身', durationSec: 2 },
+    ],
+    shots: [
+      {
+        id: 'E01-01-01', segment: 'E01-01', scene: 'S01', kind: 'action', durationSec: 2, claims: ['A2'],
+        camera: { side: '院内', size: '全景' }, inFrame: [{ who: '甲', pos: '院中', facing: '朝门' }],
+        eyeline: '看门', action: '他转身，随后抬脚', others: '无', light: '日光', lastFrame: '站定', prompt: '',
+      },
+      {
+        id: 'E01-01-02', segment: 'E01-01', scene: 'S01', kind: 'action', durationSec: 3, claims: ['A1', 'L1'],
+        camera: { side: '院内', size: '近景' }, inFrame: [{ who: '甲', pos: '院中', facing: '朝门' }],
+        eyeline: '看门', action: '抬手', others: '无', light: '日光', lastFrame: '手停', prompt: '',
+      },
+    ],
+  };
+  normalizeStoryboard(outOfOrder);
+  check('认领顺序回退会被重排', outOfOrder.beats.map((beat) => beat.id).join(',') === 'A2,A1,L1', outOfOrder.beats.map((beat) => beat.id).join(','));
+  check('动作里的「随后」被清掉', !outOfOrder.shots[0].action.includes('随后'), outOfOrder.shots[0].action);
+
+  // 节拍 kind 只允许 line / action：模型写成 reaction 要归成 action，写成 dialogue 要归成 line 并补说话人。
+  const kindsDoc = {
+    title: '类型', targetSeconds: 4, scenes: [{ id: 'S01' }],
+    beats: [
+      { id: 'K1', scene: 'S01', kind: 'reaction', text: '转身', durationSec: 2 },
+      { id: 'K2', scene: 'S01', kind: 'dialogue', text: '走吧', durationSec: 2 },
+    ],
+    shots: [{
+      id: 'E01-01-01', segment: 'E01-01', scene: 'S01', kind: 'action', durationSec: 4, claims: ['K1', 'K2'],
+      camera: { side: '院内', size: '全景' }, inFrame: [{ who: '甲', pos: '院中', facing: '朝门' }],
+      eyeline: '看门', action: '转身', others: '无', light: '日光', lastFrame: '站定', prompt: '',
+    }],
+  };
+  normalizeStoryboard(kindsDoc);
+  check('reaction 归成 action', kindsDoc.beats[0].kind === 'action', kindsDoc.beats[0].kind);
+  check('dialogue 归成 line 并补说话人', kindsDoc.beats[1].kind === 'line' && Boolean(kindsDoc.beats[1].speaker), `${kindsDoc.beats[1].kind}/${kindsDoc.beats[1].speaker}`);
+}
 
 const segments = segmentsOf(sample);
 check('切成 2 段', segments.length === 2, JSON.stringify(segments.map((segment) => segment.id)));
@@ -158,6 +300,29 @@ check('好配音过门', gateVoice(goodVoice, { storyboard: sample, characters: 
 check('漏台词被拦', !gateVoice({ ...goodVoice, lines: goodVoice.lines.slice(0, 2) }, { storyboard: sample }).ok);
 check('假音色被拦', !gateVoice({ ...goodVoice, characters: [{ ...goodVoice.characters[0], voiceId: 'v_fake' }, goodVoice.characters[1]] }, { storyboard: sample }).ok);
 
+// 配音方案修门：长辈不许用少女声，同性别不许撞同一个音色。
+{
+  const plan = {
+    characters: [
+      { name: '胡夫人', voiceId: 'v_f_bright', pitch: '中性' },
+      { name: '胡二娘', voiceId: 'v_f_bright', pitch: '偏高' },
+      { name: '桂儿', voiceId: 'v_f_bright', pitch: '偏高' },
+    ],
+    lines: [
+      { beatId: 'B1', speaker: '胡夫人', text: '签了婚书。', voiceId: 'v_f_bright' },
+      { beatId: 'B2', speaker: '桂儿', text: '吉时到！', voiceId: 'v_f_bright' },
+    ],
+  };
+  normalizeVoicePlan(plan, { story: { characters: [
+    { name: '胡夫人', age: '45-50' },
+    { name: '胡二娘', age: '20-25' },
+    { name: '桂儿', age: '18' },
+  ] } });
+  check('长辈不再用明亮女声', plan.characters[0].voiceId === 'v_f_salt' && plan.characters[0].pitch === '偏低', JSON.stringify(plan.characters[0]));
+  check('同性别撞音色会被换开', new Set(plan.characters.map((character) => character.voiceId)).size === 3, plan.characters.map((character) => character.voiceId).join(','));
+  check('台词音色跟着人物走', plan.lines[0].voiceId === 'v_f_salt', plan.lines[0].voiceId);
+}
+
 // ---------------------------------------------------------------------------
 console.log('\n[3] 剪辑清单门禁');
 const goodEdl = {
@@ -178,6 +343,33 @@ check('坏转场被拦', !gateEdit({ ...goodEdl, order: [{ ...goodEdl.order[0], 
 const timedRender = { tasks: [{ segmentId: 'E01-01', status: 'completed', duration: 5 }, { segmentId: 'E01-02', status: 'completed', duration: 8 }] };
 check('成片超时长被拦', !gateEdit(goodEdl, { render: timedRender, project: { targetSeconds: 5 } }).ok);
 check('成片时长吻合放行', gateEdit(goodEdl, { render: timedRender, project: { targetSeconds: 13 } }).ok);
+
+// 叙事顺序守卫：模型把后面的段提前当过渡 → 排回分镜顺序；只有 ≤2 秒的钩子允许前置。
+{
+  const tasks = segmentsOf(sample).map((segment) => ({ segmentId: segment.id, duration: segment.duration, status: 'completed', file: 'x.mp4' }));
+  const runEdit = async (order) => createAgents({
+    config: {},
+    callModel: async () => JSON.stringify({
+      order,
+      audio: { bgm: '钢琴', gainDb: -18, lufs: -14 },
+      packaging: { title: '标题', hook: '钩子', description: '文案', hashtags: ['#a', '#b'] },
+      notes: [],
+      rationale: '测试',
+    }),
+  }).edit({ project: { targetSeconds: 15, brief: {} }, storyboard: sample, render: { tasks }, voice: { bgm: {} } });
+  const natural = segmentsOf(sample).map((segment) => segment.id);
+  const reordered = await runEdit([
+    { segmentId: natural[1], trimStart: 0, trimEnd: null, transition: 'cut', reason: '过渡' },
+    { segmentId: natural[0], trimStart: 0, trimEnd: null, transition: 'cut', reason: '正片' },
+  ]);
+  check('乱序 EDL 会排回分镜顺序', reordered.order.map((entry) => entry.segmentId).join(',') === natural.join(','), reordered.order.map((entry) => entry.segmentId).join(','));
+  check('顺序修正会标注在 rationale', String(reordered.rationale).includes('宿主修正'));
+  const hook = await runEdit([
+    { segmentId: natural[1], trimStart: 0, trimEnd: 1.5, transition: 'cut', reason: '钩子' },
+    { segmentId: natural[0], trimStart: 0, trimEnd: null, transition: 'cut', reason: '正片' },
+  ]);
+  check('≤2 秒的片头钩子允许前置', hook.order[0].segmentId === natural[1] && !hook.orderFixed, hook.order.map((entry) => entry.segmentId).join(','));
+}
 
 // ---------------------------------------------------------------------------
 console.log('\n[4] JSON 提取');
@@ -437,20 +629,7 @@ console.log('\n[11] 环境自检');
 }
 
 // ---------------------------------------------------------------------------
-console.log('\n[12] 示例项目');
-{
-  const demoDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'demo');
-  const dir = await mkdtemp(join(tmpdir(), 'cs-demo-'));
-  const { template } = await materializeDemo({ demoDir, dir });
-  check('示例成片已复制', existsSync(template.finalFile), template.finalFile);
-  check('分段路径已替换', template.stages.render.artifact.tasks.every((task) => existsSync(task.file)));
-  check('没有残留占位符', !JSON.stringify(template).includes('__SEG_') && !JSON.stringify(template).includes('__FINAL__'));
-  check('示例成片有内容', (await readFile(template.finalFile)).length > 100 * 1024);
-  await rm(dir, { recursive: true, force: true });
-}
-
-// ---------------------------------------------------------------------------
-console.log('\n[13] 生图工作台接口 + 模型看图能力');
+console.log('\n[12] 生图工作台接口 + 模型看图能力');
 {
   const dir = await mkdtemp(join(tmpdir(), 'cs-wb-'));
   await writeFile(join(dir, 'config.local.json'), JSON.stringify({
@@ -475,6 +654,189 @@ console.log('\n[13] 生图工作台接口 + 模型看图能力');
   check('doctor 指出模型不能看图', textOnly.items.some((item) => item.name.includes('不支持看图') && item.status === 'warn'));
   const vision = await runDoctor({ ...base, probeModel: async () => ({ provider: 'p', model: 'm', inputModalities: ['text', 'image'] }) });
   check('doctor 认可可看图的模型', vision.items.some((item) => item.name.includes('含看图') && item.status === 'ok'));
+
+  const ideaDefault = resolveConfig({ dataDir: join(tmpdir(), 'cs-idea'), projectDir: join(tmpdir(), 'cs-idea-p') }, {});
+  check('默认创意方向要人工过一眼', ideaDefault.options.reviewIdea === true);
+  const ideaOff = resolveConfig({ reviewIdea: false }, {});
+  check('可以关掉创意方向暂停', ideaOff.options.reviewIdea === false);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n[14] 报错压一句 + 删项目的关联记录');
+{
+  const noisy = [
+    'ERROR: [Douyin] 7697184731258965288: Fresh cookies (not necessarily logged in) are needed',
+    'ERROR: [Douyin] 7697184731258965288: Fresh cookies (not necessarily logged in) are needed',
+    '抖音要求「新鲜 cookie」，未登录也可以，但必须由浏览器提供。二选一：',
+    'A) Chrome 装扩展「Get cookies.txt LOCALLY」→ 导出 cookies.txt',
+    'Command failed: E:\\dsh\\DeepSeek Harness.exe C:\\Users\\dsh\\skills\\fetch.mjs https://v.douyin.com/x/',
+    '    at ChildProcess.exithandler (node:child_process:123:4)',
+  ].join('\n');
+  const compact = compactMessage(noisy);
+  check('报错里保留中文下一步', compact.includes('新鲜 cookie') && compact.includes('Get cookies.txt'), compact);
+  check('报错里没有命令行和堆栈', !compact.includes('Command failed') && !compact.includes('at ChildProcess'), compact);
+  check('重复的 ERROR 行只出现一次', compact.split('ERROR:').length === 1, compact);
+  check('长报错一定被截断', compactMessage('x'.repeat(5000)).length <= 241);
+  check('空报错不返回 undefined', compactMessage('') === '');
+  check('ENOENT 翻译成人话并带路径',
+    friendlyError(Object.assign(new Error("ENOENT: no such file or directory, open 'D:\\p\\project.json'"), { code: 'ENOENT' }))
+      === '文件或目录已经不在了：D:\\p\\project.json');
+  check('普通中文报错原样保留', friendlyError(new Error('还没有分镜，不能出片')) === '还没有分镜，不能出片');
+
+  // 关联记录：删项目时 inbox / queue 里指向它的条目要一起清掉。
+  const dir = await mkdtemp(join(tmpdir(), 'cs-traces-'));
+  const dataRoot = join(dir, 'data');
+  const traces = createTraces({ dataRoot });
+  await mkdir(dataRoot, { recursive: true });
+  await writeFile(join(dataRoot, 'inbox.json'), JSON.stringify([
+    { projectId: 'cs_a', stage: 'idea' }, { projectId: 'cs_a', stage: 'story' }, { projectId: 'cs_b', stage: 'edit' },
+  ]), 'utf8');
+  await writeFile(join(dataRoot, 'queue.json'), JSON.stringify([{ id: 'cs_a', stage: 'idea' }, { id: 'cs_b', stage: 'edit' }]), 'utf8');
+  const purged = await traces.purge('cs_a');
+  check('删项目时清掉它的复核记录', purged.inbox === 2 && (await traces.readInbox()).length === 1, JSON.stringify(purged));
+  check('删项目时清掉它的队列行', purged.queue === 1 && (await traces.readQueue()).length === 1, JSON.stringify(purged));
+  check('别的项目的记录不动', (await traces.readInbox())[0].projectId === 'cs_b');
+  const swept = await traces.sweep(['cs_b']);
+  check('启动清理只收指向已删项目的残留', swept.inbox === 0 && swept.queue === 0);
+  await writeFile(join(dataRoot, 'inbox.json'), JSON.stringify([{ projectId: 'cs_gone' }, { projectId: 'cs_b' }]), 'utf8');
+  const swept2 = await traces.sweep(['cs_b']);
+  check('指向已删项目的残留会被收掉', swept2.inbox === 1 && (await traces.readInbox()).length === 1, JSON.stringify(swept2));
+  await rm(dir, { recursive: true, force: true });
+}
+
+console.log('\n[15] 一句话/剧本开工：导演确认');
+{
+  check('内置指令能交给面板看', builtinPrompt('story').includes('把选定的创意方向') && builtinPrompt('reviewer').includes('审核 Agent'));
+  check('配音提示要求按年龄挑音色', builtinPrompt('voice').includes('音色年龄必须贴人物年龄'));
+  const scripted = newProject({ title: '测试', source: { kind: 'script', text: '第一场 夜 面馆\n老周：还是不要葱？' } });
+  check('项目记住原始剧本', scripted.source?.kind === 'script' && scripted.source.text.includes('还是不要葱'));
+  check('新建项目默认没有确认过', scripted.intake?.status === 'idle' && scripted.intake.questions.length === 0);
+
+  const raw = {
+    summary: '  拍  凌晨面馆  ',
+    title: '十二点的面',
+    kind: 'script',
+    brief: { productName: '清汤面', sellingPoints: ['12 块', '  ', '凌晨开门'], projectMode: 'story', unknownField: 'x' },
+    questions: [
+      { field: 'targetSeconds', question: '这条想做多长？', options: [{ label: '15 秒', value: '15' }, { label: '45 秒', value: '45' }], default: '45' },
+      { field: 'targetSeconds', question: '重复字段要丢掉', default: '30' },
+      { field: 'platform', question: '发哪个平台？', default: 'douyin' },
+      { field: 'audioMode', question: '要不要台词？', options: [{ label: '要', value: 'dialogue' }], default: 'dialogue' },
+      { field: '随口写的', question: '越界字段归到补充说明', default: '随便' },
+      { field: 'tone', question: '第五个问题会被截掉', default: '温情' },
+    ],
+  };
+  const result = normalizeIntakeResult(raw, scripted);
+  check('问题最多 4 个', result.questions.length === 4, String(result.questions.length));
+  check('同一字段只问一次', new Set(result.questions.map((q) => q.field)).size === result.questions.length);
+  check('越界字段落到 extra', result.questions[3].field === 'extra', result.questions[3].field);
+  check('每条问题都有默认值', result.questions.every((q) => Boolean(q.default)));
+  check('模型吐的脏字段被丢掉', result.brief.unknownField === undefined && !('targetSeconds' in result.brief));
+  check('空卖点被过滤', JSON.stringify(result.brief.sellingPoints) === JSON.stringify(['12 块', '凌晨开门']));
+  check('summary 压成一行', result.summary === '拍 凌晨面馆', result.summary);
+  check('剧本识别为 script', result.kind === 'script');
+
+  const target = newProject({ title: '落库', source: { kind: 'idea', text: '拍面馆' } });
+  for (const question of result.questions) applyIntakeAnswer(target, question.field, question.default);
+  check('时长答案落进项目', target.targetSeconds === 45, String(target.targetSeconds));
+  check('平台答案落进项目', target.platform === 'douyin', target.platform);
+  check('声音形式答案落进画像', target.brief.audioMode === 'dialogue', target.brief.audioMode);
+  check('越界答案记进补充说明', String(target.brief.extra).includes('随便'), target.brief.extra);
+
+  // 剧本模式：原文要进剧情提示词，且明确「不许重写」。
+  let scriptPrompt = '';
+  const scriptAgents = createAgents({
+    callModel: async ({ user }) => {
+      scriptPrompt = user;
+      return '{"title":"t","logline":"l","premise":"p","punchline":"q","characters":[],"acts":[],"ending":"e"}';
+    },
+    config: {},
+  });
+  await scriptAgents.produce({
+    stage: 'story',
+    project: { title: '剧本', targetSeconds: 45, brief: { productName: '清汤面' }, source: { kind: 'script', text: '老周：还是不要葱？' } },
+    context: {},
+  });
+  check('剧本原文进了剧情提示词', scriptPrompt.includes('老周：还是不要葱？'));
+  check('剧本模式给了硬要求', scriptPrompt.includes('剧本模式（硬要求）'));
+  let characterPrompt = '';
+  const characterAgents = createAgents({
+    callModel: async ({ user }) => {
+      characterPrompt = user;
+      return '{"style":"冷调夜景","characters":[]}';
+    },
+    config: {},
+  });
+  await characterAgents.produce({
+    stage: 'characters',
+    project: { title: '剧本', targetSeconds: 45, brief: {}, source: { kind: 'script', text: '老周：还是不要葱？' } },
+    context: {},
+  });
+  check('人物阶段不再重复塞剧本', !characterPrompt.includes('还是不要葱'));
+}
+
+console.log('\n[16] 长视频先截高光段再拉');
+{
+  const silent = silentPerformancePrompt('镜头15：她开口。胡夫人：「签了婚书，也签个领用单。」视线：看她。');
+  check('默剧版提示词拿掉台词', !silent.includes('签了婚书') && !silent.includes('「'), silent);
+  check('默剧版提示词要求不开口', silent.includes('不开口') && silent.includes('口型'), silent);
+  // 长片分镜：要求模型省字（不写 prompt、紧凑 JSON），否则 96 秒的 JSON 会撞输出上限。
+  let longBoardPrompt = '';
+  const longAgents = createAgents({
+    callModel: async ({ user }) => {
+      longBoardPrompt = user;
+      return '{"title":"x","targetSeconds":96,"scenes":[],"beats":[],"shots":[]}';
+    },
+    config: {},
+  });
+  await longAgents.produce({
+    stage: 'storyboard',
+    project: { title: '长片', targetSeconds: 96, brief: {} },
+    context: {},
+  });
+  check('长片分镜走省字模式', longBoardPrompt.includes('长片省字模式') && longBoardPrompt.includes('不要输出 shots[].prompt'));
+  check('长片 schema 不再示例 prompt 字段', !longBoardPrompt.includes('"lastFrame": "", "prompt": ""'));
+  check('长片限制镜头数', longBoardPrompt.includes('镜头总数控制在 24 个以内'));
+  check('短片分镜不触发省字模式', builtinPrompt('storyboard').includes('长片省字模式') === false);
+  check('短片 schema 保留 prompt 字段', builtinPrompt('storyboard').includes('"lastFrame": "", "prompt": ""'));
+
+  // 输出被截断时：错误里要带原始输出（宿主据此落盘），并标明是截断。
+  const cutAgents = createAgents({
+    callModel: async () => '{"title":"半截","shots":[{"id":"E01-01-01"',
+    config: {},
+  });
+  let cutError = null;
+  try {
+    await cutAgents.produce({ stage: 'storyboard', project: { title: '截断', targetSeconds: 45, brief: {} }, context: {} });
+  } catch (error) {
+    cutError = error;
+  }
+  check('截断错误带原始输出', String(cutError?.raw ?? '').includes('"shots"'));
+  check('截断错误标明被截断', String(cutError?.message ?? '').includes('截断'));
+
+  const long = pickReferenceWindow({ duration: 3216, maxSeconds: 120 });
+  check('53 分钟整片 → 只拆前 120 秒', long.trim === true && long.start === 0 && long.seconds === 120, JSON.stringify(long));
+  check('记住原片时长', long.originalDuration === 3216, String(long.originalDuration));
+
+  const mid = pickReferenceWindow({ duration: 3216, startSeconds: 1800, maxSeconds: 90 });
+  check('从中间截：起始秒 + 时长', mid.trim === true && mid.start === 1800 && mid.seconds === 90, JSON.stringify(mid));
+
+  const short = pickReferenceWindow({ duration: 60, maxSeconds: 120 });
+  check('短视频不截', short.trim === false && short.seconds === 60, JSON.stringify(short));
+
+  const explicit = pickReferenceWindow({ duration: 60, maxSeconds: 120, durationSeconds: 20 });
+  check('手动指定比默认短就按手动来', explicit.trim === true && explicit.seconds === 20, JSON.stringify(explicit));
+
+  const tail = pickReferenceWindow({ duration: 60, startSeconds: 55, maxSeconds: 120 });
+  check('起始秒贴近片尾时夹住', tail.trim === false && tail.start === 55 && tail.seconds === 5, JSON.stringify(tail));
+
+  const off = pickReferenceWindow({ duration: 3216, maxSeconds: 0 });
+  check('配置 0 = 不截整片', off.trim === false && off.seconds === 3216, JSON.stringify(off));
+
+  const parsed = parseReferenceWindowInput({ startSeconds: '12', durationSeconds: 90 });
+  check('截取参数会转数字', parsed.startSeconds === 12 && parsed.durationSeconds === 90, JSON.stringify(parsed));
+  check('空值交给配置默认', parseReferenceWindowInput({ startSeconds: '', durationSeconds: null }).startSeconds === undefined);
+  check('负数被丢掉', parseReferenceWindowInput({ startSeconds: -5 }).startSeconds === undefined);
 }
 
 console.log(`\n结果：${pass} 通过，${failed} 失败`);

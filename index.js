@@ -19,21 +19,25 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 import { createStore, newProject, event, STAGES, STAGE_IDS, STAGE_BY_ID, STAGE_STATUS } from './engine/store.js';
+import { compactMessage, friendlyError } from './engine/errors.js';
+import { createTraces } from './engine/traces.js';
 import {
   GATES,
   SIX_DIMENSIONS,
   VOICE_CATALOG,
   describeFailures,
   applyLocks,
+  fillStoryboardPrompts,
+  normalizeStoryboard,
+  normalizeVoicePlan,
   loadShotContract,
   patchStoryboard,
   segmentsOf,
   gateRender,
 } from './engine/contracts.js';
-import { createAgents, extractJson } from './engine/agents.js';
+import { createAgents, builtinPrompt, extractJson } from './engine/agents.js';
 import { loadMachineOverrides, resolveConfig } from './engine/config.js';
 import { runDoctor } from './engine/doctor.js';
-import { materializeDemo } from './engine/demo.js';
 import { createReference } from './engine/reference.js';
 import { detectBurnedCaptions } from './engine/burned-captions.js';
 import { matchesStamp, promptLayerFingerprint } from './engine/fingerprint.js';
@@ -46,7 +50,7 @@ import { synthesizeLines, placeLines } from './engine/voice.js';
 const API_PREFIX = '/creative-studio/api';
 const FILE_ROUTE = '/creative-studio/file';
 const BODY_LIMIT = 4 * 1024 * 1024;
-/** 包根目录：示例项目与包内资源都相对它找。 */
+/** 包根目录：包内资源（配音适配器、图标等）都相对它找。 */
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -79,6 +83,185 @@ function normalizeSource(urlRaw, localRaw) {
     localPath = '';
   }
   return { url, localPath };
+}
+
+/** 导演确认里能落到画像的字段（其余一律当补充说明）。 */
+const INTAKE_BRIEF_FIELDS = ['productName', 'category', 'audience', 'sellingPoints', 'tone', 'priceBand', 'forbidden', 'extra', 'projectMode', 'audioMode'];
+const PLATFORMS = ['douyin', 'shipinhao', 'xiaohongshu', 'bilibili'];
+
+const oneLine = (value, max = 160) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+/** 从用户贴的原文里起一个能认出来的项目名（不超过 18 字）。 */
+function titleFromText(value, fallback = '未命名项目') {
+  const line = String(value ?? '').split(/\r?\n/).map((row) => row.replace(/^[#\s>*\-—]+/, '').trim()).find(Boolean) ?? '';
+  if (!line) return fallback;
+  return line.length > 18 ? `${line.slice(0, 18)}…` : line;
+}
+
+/**
+ * 把导演返回的东西收成可存的结构：只认白名单字段，问题最多 4 个、每个都必须有默认值。
+ * 模型偶尔会多吐字段/把选项写成字符串，这里统一收口，别让脏值进项目文件。
+ */
+export function normalizeIntakeResult(raw, project = {}) {
+  const incoming = raw?.brief ?? {};
+  const brief = {};
+  for (const key of ['productName', 'category', 'audience', 'tone', 'priceBand', 'extra']) {
+    const value = String(incoming[key] ?? '').trim();
+    if (value) brief[key] = oneLine(value, 240);
+  }
+  if (Array.isArray(incoming.sellingPoints)) {
+    brief.sellingPoints = incoming.sellingPoints.map((item) => oneLine(item, 120)).filter(Boolean).slice(0, 8);
+  }
+  if (Array.isArray(incoming.forbidden)) {
+    brief.forbidden = incoming.forbidden.map((item) => oneLine(item, 40)).filter(Boolean).slice(0, 12);
+  }
+  if (incoming.projectMode) brief.projectMode = incoming.projectMode === 'story' ? 'story' : 'promotion';
+  if (incoming.audioMode) brief.audioMode = incoming.audioMode === 'no-dialogue' ? 'no-dialogue' : 'dialogue';
+
+  const projectPatch = {};
+  const seconds = Number(incoming.targetSeconds ?? raw?.targetSeconds);
+  if (Number.isFinite(seconds) && seconds >= 10 && seconds <= 180) projectPatch.targetSeconds = Math.round(seconds);
+  const platform = String(incoming.platform ?? raw?.platform ?? '');
+  if (PLATFORMS.includes(platform)) projectPatch.platform = platform;
+  const aspect = String(incoming.aspect ?? raw?.aspect ?? '').trim();
+  if (aspect) projectPatch.aspect = aspect;
+
+  const kind = incoming.kind === 'script' || raw?.kind === 'script' || project?.source?.kind === 'script' ? 'script' : 'idea';
+  const questions = [];
+  const seenFields = new Set();
+  const list = Array.isArray(raw?.questions) ? raw.questions : [];
+  for (const item of list) {
+    if (questions.length >= 4) break;
+    let field = String(item?.field ?? '').trim();
+    if (!INTAKE_BRIEF_FIELDS.includes(field) && !['targetSeconds', 'platform', 'aspect'].includes(field)) field = 'extra';
+    if (seenFields.has(field)) continue;
+    const question = oneLine(item?.question, 120);
+    if (!question) continue;
+    const options = (Array.isArray(item?.options) ? item.options : [])
+      .map((option) => ({ label: oneLine(option?.label, 60), value: oneLine(option?.value, 80) }))
+      .filter((option) => option.label && option.value)
+      .slice(0, 4);
+    const fallback = options[0]?.value ?? '';
+    let defaultValue = oneLine(item?.default, 80) || fallback;
+    // 模型给的默认值不在选项里：退到第一个选项，别让面板上没有一个「推荐」。
+    if (options.length > 0 && !options.some((option) => option.value === defaultValue)) defaultValue = fallback;
+    if (!defaultValue) continue;
+    seenFields.add(field);
+    questions.push({
+      id: `q${questions.length + 1}`,
+      field,
+      question,
+      why: oneLine(item?.why, 120),
+      options,
+      default: defaultValue,
+      kind: options.length > 0 ? 'choice' : 'text',
+    });
+  }
+
+  return {
+    summary: oneLine(raw?.summary, 200),
+    title: oneLine(raw?.title, 32),
+    kind,
+    brief,
+    projectPatch,
+    questions,
+  };
+}
+
+/** 把一条确认答案写进项目：画像字段进 brief，时长/平台/画幅进项目。 */
+export function applyIntakeAnswer(project, field, value) {
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  if (field === 'targetSeconds') {
+    const seconds = Math.round(Number(text));
+    if (!Number.isFinite(seconds)) return false;
+    project.targetSeconds = Math.max(10, Math.min(180, seconds));
+    return true;
+  }
+  if (field === 'platform') {
+    if (!PLATFORMS.includes(text)) return false;
+    project.platform = text;
+    return true;
+  }
+  if (field === 'aspect') {
+    project.aspect = text;
+    return true;
+  }
+  if (field === 'sellingPoints' || field === 'forbidden') {
+    project.brief[field] = text.split(/[\n，,、；;]/).map((item) => item.trim()).filter(Boolean).slice(0, 12);
+    return true;
+  }
+  if (field === 'projectMode') {
+    project.brief.projectMode = text === 'story' ? 'story' : 'promotion';
+    return true;
+  }
+  if (field === 'audioMode') {
+    project.brief.audioMode = text === 'no-dialogue' ? 'no-dialogue' : 'dialogue';
+    return true;
+  }
+  if (['productName', 'category', 'audience', 'tone', 'priceBand', 'extra'].includes(field)) {
+    project.brief[field] = text.slice(0, 600);
+    return true;
+  }
+  // 没有对应字段的问题：当补充说明记下来，别丢掉用户写的东西。
+  project.brief.extra = [String(project.brief.extra ?? '').trim(), text].filter(Boolean).join('\n').slice(0, 2000);
+  return true;
+}
+
+/**
+ * 长视频只拆一段：整片解码会让切点扫描自己就跑满十分钟。
+ * 返回要不要截、从哪开始、截多长；0 秒 = 不截（整片拆）。
+ */
+export function pickReferenceWindow({ duration, startSeconds = 0, maxSeconds = 0, durationSeconds = 0 } = {}) {
+  const total = Number(duration) || 0;
+  if (total <= 0) return { trim: false, start: 0, seconds: 0, originalDuration: 0 };
+  const start = Math.max(0, Math.min(Number(startSeconds) || 0, Math.max(0, total - 1)));
+  const wanted = Number(durationSeconds) > 0 ? Number(durationSeconds) : Number(maxSeconds) || 0;
+  // 剩下的比想要的还短（或配置里关掉了截取）：整段直接拆。
+  if (!wanted || total - start <= wanted + 1) {
+    return { trim: false, start, seconds: Number((total - start).toFixed(2)), originalDuration: Number(total.toFixed(2)) };
+  }
+  return {
+    trim: true,
+    start,
+    seconds: Number(Math.min(wanted, total - start).toFixed(2)),
+    originalDuration: Number(total.toFixed(2)),
+  };
+}
+
+/** 面板/工具传来的截取参数：空值 = 用配置默认（referenceMaxSeconds / referenceStartSeconds）。 */
+export function parseReferenceWindowInput(payload = {}) {
+  const pick = (value) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    const number = Math.round(Number(value));
+    return Number.isFinite(number) && number >= 0 ? number : undefined;
+  };
+  return { startSeconds: pick(payload.startSeconds), durationSeconds: pick(payload.durationSeconds) };
+}
+
+/** 把秒数说成人话：3216 → 53:36。 */
+const clockText = (seconds) => {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+};
+
+/**
+ * 视频生成用的「默剧版」提示词：对白全部交给后期 TTS，画面里的人物不开口。
+ * H3 看到台词会自己张嘴念，嘴型节奏和我们的 TTS 对不上；把台词从画面提示词里拿掉，
+ * 只留动作/视线/光位，人物用眼神和身体表演，口型问题就不存在了。
+ */
+export function silentPerformancePrompt(prompt) {
+  const body = String(prompt ?? '')
+    // 说话人 + 引号台词整段拿掉
+    .replace(/[^\s：:（）()]*[：:]\s*「[^」]*」/g, '')
+    // 剩下没有说话人的引号台词
+    .replace(/「[^」]*」/g, '')
+    // 开口/说话这类动作提示改成沉默表演
+    .replace(/(画外开口|开口说|说完一句|说完|开口|嘴动一下|嘴动|说台词)/g, '沉默地看向对方')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return `${body}\n\n本片对白后期配音：人物不开口、不做说话口型，用眼神、呼吸和身体动作表演，画面里看不到说话的口型。`;
 }
 
 const log = (...args) => console.error('[creative-studio]', ...args);
@@ -125,6 +308,8 @@ export const inject = ['connection', 'webServer', 'tools', 'llm', 'attachments']
 export function apply(ctx, config = {}) {
   const { options, dataRoot, projectRoot, promptsDir } = resolveConfig(config, loadMachineOverrides({ log }));
   const inboxFile = join(dataRoot, 'inbox.json');
+  /** 项目之外的关联数据（复核通知、运行队列）：删项目时要一起清。 */
+  const traces = createTraces({ dataRoot, log });
   /** 正在跑的项目：id -> { stage, startedAt, stageStartedAt } */
   const jobs = new Map();
   const store = createStore({ root: projectRoot, isRunning: (id) => jobs.has(id) });
@@ -172,6 +357,19 @@ export function apply(ctx, config = {}) {
       await writeFile(queueFile, '[]', 'utf8').catch(() => {});
     } catch (error) {
       log(`恢复任务队列失败（忽略）：${error.message}`);
+    }
+  })();
+  // 启动时顺手收一遍历史残留：指向已删项目的复核记录、运行队列行。
+  // 不这么做的话，删掉的项目会在 inbox.json 里一直躺着（面板不显示，但盘上还在）。
+  void (async () => {
+    try {
+      const rows = await store.list();
+      const swept = await traces.sweep(rows.map((row) => row.id));
+      if (swept.inbox || swept.queue) {
+        log(`清掉指向已删项目的残留记录：复核 ${swept.inbox} 条 / 队列 ${swept.queue} 条`);
+      }
+    } catch (error) {
+      log(`清理残留记录失败（不影响使用）：${error.message}`);
     }
   })();
   const media = createMedia({ ffmpegPath: options.ffmpegPath, log });
@@ -322,6 +520,8 @@ export function apply(ctx, config = {}) {
     if (stage === 'voice') {
       context.storyboard = await artifactOf(project, 'storyboard');
       context.characters = await artifactOf(project, 'characters');
+      // 故事里有每个人物的年龄段：配音按年龄挑音色，别给夫人配少女声。
+      context.story = await artifactOf(project, 'story');
     }
     if (stage === 'edit') {
       context.storyboard = await artifactOf(project, 'storyboard');
@@ -404,7 +604,7 @@ export function apply(ctx, config = {}) {
   // -------------------------------------------------------------------------
   // 参考爆款：拉片 → 拆解报告（作为创意阶段的证据）
   // -------------------------------------------------------------------------
-  async function runReferenceJob(project, { url, localPath, advanced = true }) {
+  async function runReferenceJob(project, { url, localPath, advanced = true, startSeconds, durationSeconds }) {
     const dir = join(store.dirOf(project.id), 'reference');
     await mkdir(dir, { recursive: true });
     const patch = async (value) => {
@@ -413,6 +613,7 @@ export function apply(ctx, config = {}) {
       }).catch(() => {});
     };
     const stage = (status, text) => patch({ status, stage: text });
+    let window = null;
     try {
       await stage('running', '准备素材');
       // 本机路径给了就必须真的存在：否则会掉进「按链接下载」，最后报一句看不懂的空链接错误。
@@ -423,9 +624,35 @@ export function apply(ctx, config = {}) {
       let video;
       if (localPath && existsSync(localPath)) {
         video = join(dir, 'video.mp4');
-        await copyFile(localPath, video);
-        await writeFile(join(dir, 'meta.json'), JSON.stringify({ source: 'local', path: localPath }, null, 2), 'utf8');
-        await stage('running', '已接收本地视频');
+        const info = await media.probe(localPath).catch(() => null);
+        window = pickReferenceWindow({
+          duration: info?.duration,
+          startSeconds: startSeconds ?? options.referenceStartSeconds,
+          maxSeconds: options.referenceMaxSeconds,
+          durationSeconds,
+        });
+        if (window.trim) {
+          // 直接从现在这个文件截，不先复制整片：53 分钟 400MB 的片子复制一遍纯属浪费。
+          await reference.trim({
+            video: localPath,
+            out: video,
+            start: window.start,
+            seconds: window.seconds,
+            ffmpegPath: options.ffmpegPath,
+            onStage: stage,
+          });
+        } else {
+          await copyFile(localPath, video);
+        }
+        await writeFile(join(dir, 'meta.json'), JSON.stringify({
+          source: 'local',
+          path: localPath,
+          originalDuration: window.originalDuration,
+          window: window.trim ? { start: window.start, seconds: window.seconds } : null,
+        }, null, 2), 'utf8');
+        await stage('running', window.trim
+          ? `原片 ${clockText(window.originalDuration)}，只拆 ${clockText(window.start)}–${clockText(window.start + window.seconds)}`
+          : '已接收本地视频');
       } else {
         const fetched = await reference.fetch({
           url,
@@ -435,6 +662,32 @@ export function apply(ctx, config = {}) {
           env: options.cookiesFile ? { YTDLP_COOKIES: options.cookiesFile } : undefined,
         });
         video = fetched.video;
+        const info = await media.probe(video).catch(() => null);
+        window = pickReferenceWindow({
+          duration: info?.duration,
+          startSeconds: startSeconds ?? options.referenceStartSeconds,
+          maxSeconds: options.referenceMaxSeconds,
+          durationSeconds,
+        });
+        if (window.trim) {
+          const clipped = join(dir, 'analysis.mp4');
+          await reference.trim({
+            video,
+            out: clipped,
+            start: window.start,
+            seconds: window.seconds,
+            ffmpegPath: options.ffmpegPath,
+            onStage: stage,
+          });
+          // 整片副本只用于截取：留着白占几百 MB，删掉；来源与原始时长都写进 meta。
+          await rm(video, { force: true }).catch(() => {});
+          video = clipped;
+          await writeFile(join(dir, 'meta.json'), JSON.stringify({
+            ...(fetched.meta ?? {}),
+            originalDuration: window.originalDuration,
+            window: { start: window.start, seconds: window.seconds },
+          }, null, 2), 'utf8');
+        }
       }
       const framed = await reference.frames({ video, dir, onStage: stage });
       // 烧字检测：素材画面上已经压了文字的话，复刻时再叠字幕就是双字幕，且剪辑阶段补不回来。
@@ -499,6 +752,9 @@ export function apply(ctx, config = {}) {
         frames: evidence.frames ?? [],
         contactSheet: evidence.contactSheet ?? null,
         transcriptLines: asr?.lines ? asr.lines.slice(0, 4000) : asr?.error ? `（转写失败：${asr.error}）` : '（没有转写）',
+        // 长视频只拆了一段：面板要能说清「原片多长、拆的是哪一段」。
+        window: window?.trim ? { start: window.start, seconds: window.seconds, originalDuration: window.originalDuration } : null,
+        originalDuration: window?.originalDuration ?? null,
         report: report.slice(0, 9000),
         reportFile: join(dir, 'report.md'),
         rea: rea ? { ok: true, summary: rea.summary, timeline: rea.timeline, videoMd: rea.videoMd, out: rea.out, reportHtml: rea.reportHtml, vision: rea.vision ?? null, visionError: rea.visionError ?? null } : null,
@@ -508,9 +764,11 @@ export function apply(ctx, config = {}) {
         event(fresh, { kind: 'reference', text: `参考爆款拆解完成：${evidence.summary?.title ?? ''}（${framed.shotCount} 镜）` });
       }).catch(() => {});
     } catch (error) {
-      await patch({ status: 'failed', stage: '失败', error: error.message });
+      // 只把一句人话写进项目：面板上不铺命令行和上游日志，完整输出留在 reference/fetch.log 里。
+      const reason = friendlyError(error, '参考爆款拆解失败');
+      await patch({ status: 'failed', stage: '失败', error: reason });
       await store.update(project.id, (fresh) => {
-        event(fresh, { kind: 'reference-error', text: `参考爆款拆解失败：${error.message}` });
+        event(fresh, { kind: 'reference-error', text: `参考爆款拆解失败：${reason}` });
       }).catch(() => {});
     }
   }
@@ -671,11 +929,39 @@ export function apply(ctx, config = {}) {
       try {
         let artifact = await agents.produce({ stage, project, context, issues, directive, signal });
         if (stage === 'storyboard') {
+          // 先把「模型算不准」的几类问题就地修掉（台词时长/纯对白镜/镜长/分段），再跑门禁。
+          const fixed = normalizeStoryboard(artifact);
+          const fixedCount = fixed.changes.kinds + fixed.changes.lines + fixed.changes.beats + fixed.changes.claims + fixed.changes.shots + fixed.changes.segments + fixed.changes.actions;
+          if (fixedCount > 0) {
+            event(project, {
+              kind: 'normalize',
+              stage,
+              text: `按门禁口径修正 ${fixedCount} 处：节拍类型 ${fixed.changes.kinds} / 台词时长 ${fixed.changes.lines} / 动作拍 ${fixed.changes.beats} / 未认领节拍 ${fixed.changes.claims} / 镜长 ${fixed.changes.shots} / 分段 ${fixed.changes.segments} / 动作措辞 ${fixed.changes.actions}`,
+            });
+          }
+          // 长片（>60 秒）让模型只填现场表，prompt 由现场表重建：JSON 小一半，避免撞输出上限被截断。
+          if (Number(project.targetSeconds) > 60) {
+            const rebuilt = fillStoryboardPrompts(artifact);
+            if (rebuilt.filled > 0) {
+              event(project, { kind: 'prompts', stage, text: `长片省字：按现场表重建 ${rebuilt.filled} 条镜头提示词` });
+            }
+          }
           // 技能明确要求：锁行不能手写，用脚本生成后逐字贴进去。宿主在这里代劳。
           const contract = await getShotContract().catch(() => null);
           const locked = applyLocks(artifact, contract?.buildLock);
           if (locked.changed > 0) {
             event(project, { kind: 'locks', stage, text: `按现场表补齐 ${locked.changed} 条锁行` });
+          }
+        }
+        if (stage === 'voice') {
+          // 年龄对不上/两个人撞同一个音色：在门禁前按人物年龄改掉音色分配。
+          const voiceFixed = normalizeVoicePlan(artifact, { story: context.story });
+          if (voiceFixed.changes.age + voiceFixed.changes.clash > 0) {
+            event(project, {
+              kind: 'voice-plan',
+              stage,
+              text: `配音按人物修正：年龄不匹配 ${voiceFixed.changes.age} 人 / 撞音色 ${voiceFixed.changes.clash} 人`,
+            });
           }
         }
         const file = await store.writeArtifact(project, stage, artifact);
@@ -709,6 +995,19 @@ export function apply(ctx, config = {}) {
             text: `${STAGE_BY_ID[stage].label}通过（第 ${attempt} 版，审核 ${review.score} 分${review.acceptedWithNotes ? `，${notes.length} 条建议` : ''}）`,
           });
           await store.save(project, { pipeline: true });
+          // 创意方向要人拍板：三条方向出来后先停下来，选一个再跑剧情（可在面板创意卡片里换方向）。
+          if (stage === 'idea' && options.reviewIdea !== false) {
+            record.status = 'needs_review';
+            record.note = '等人工选方向';
+            await store.save(project, { pipeline: true });
+            const pending = await notifyReview(project, stage, {
+              score: review.score,
+              issues: [],
+              gateFailures: [],
+              reason: '创意方向已出：在创意卡片里选一个方向，点「通过」后再继续跑剧情',
+            });
+            return { ok: false, stage, needsReview: true, pendingReview: pending };
+          }
           if (stage === 'characters') await ensurePortraits(project, artifact);
           if (stage === 'voice') {
             // 方案过了不算完：要真的合成出声音，并且念出来装得进镜头。装不进就停下来让人决定。
@@ -742,6 +1041,22 @@ export function apply(ctx, config = {}) {
         await store.save(project, { pipeline: true });
       } catch (error) {
         record.error = error.message;
+        // JSON 解析失败时把模型的原始输出留下来：分镜到底断在哪、是不是被截断，看文件就知道。
+        if (stage === 'storyboard' && error?.raw) {
+          const reviewDir = join(store.dirOf(project.id), 'review');
+          await mkdir(reviewDir, { recursive: true }).catch(() => {});
+          await writeFile(join(reviewDir, `storyboard-raw-${attempt}.txt`), String(error.raw).slice(0, 400_000), 'utf8').catch(() => {});
+        }
+        // 输出被截断是「这一版太长」，不是内容错：压缩要求后再试一轮，别整个阶段直接判死。
+        const truncated = /截断|输出上限/.test(String(error.message));
+        if (truncated && attempt < maxAttempts) {
+          record.status = 'rework';
+          record.issues = ['上一版输出被截断：这一版必须更短——镜头数再少一些，只填现场表字段，绝对不要输出 prompt。'];
+          issues = record.issues;
+          event(project, { kind: 'stage-rework', stage, text: `第 ${attempt} 版输出被截断，压缩后重试` });
+          await store.save(project, { pipeline: true });
+          continue;
+        }
         record.status = 'failed';
         event(project, { kind: 'stage-error', stage, text: `${STAGE_BY_ID[stage].label}失败：${error.message}` });
         await store.save(project, { pipeline: true });
@@ -767,24 +1082,44 @@ export function apply(ctx, config = {}) {
     // 有 Codex 用 Codex 的 image_generation，否则用 HTTP 生图；两者都没有就跳过。
     if (!options.imageKey && !options.codexCmd && !findCodex()) return;
     const dir = join(store.dirOf(project.id), 'portraits');
+    // 人物多的时候一张张排队要好几分钟：两张并发，既不压垮接口也快一倍。
+    const queue = (artifact.characters ?? []).filter((character) => !(character.portrait?.file && existsSync(character.portrait.file)));
+    if (queue.length === 0) return;
     let changed = false;
-    for (const character of artifact.characters ?? []) {
-      if (character.portrait?.file && existsSync(character.portrait.file)) continue;
-      try {
-        const prompt = [artifact.style, character.prompt, '半身像，正面，纯灰背景，柔和均匀的柔光，无文字，无水印。']
-          .filter(Boolean)
-          .join('，');
-        const result = await video.generateImage({ prompt, dir, filename: `${character.name}.png` });
-        character.portrait = { file: result.file, model: result.model, at: Date.now() };
-        changed = true;
-        event(project, { kind: 'portrait', stage: 'characters', text: `定妆图已生成：${character.name}` });
-      } catch (error) {
-        character.portrait = { error: error.message, at: Date.now() };
-        changed = true;
-        event(project, { kind: 'portrait-error', stage: 'characters', text: `定妆图失败（${character.name}）：${error.message}` });
+    const worker = async () => {
+      for (;;) {
+        const character = queue.shift();
+        if (!character) return;
+        try {
+          const prompt = [artifact.style, character.prompt, '半身像，正面，纯灰背景，柔和均匀的柔光，无文字，无水印。']
+            .filter(Boolean)
+            .join('，');
+          // 生图接口偶尔会 transient 断流（terminated / timeout）：隔两秒再试一次，别因为一张图丢掉这个人物。
+          let result;
+          let lastError;
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            try {
+              result = await video.generateImage({ prompt, dir, filename: `${character.name}.png` });
+              lastError = null;
+              break;
+            } catch (error) {
+              lastError = error;
+              if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+          }
+          if (!result) throw lastError;
+          character.portrait = { file: result.file, model: result.model, at: Date.now() };
+          changed = true;
+          event(project, { kind: 'portrait', stage: 'characters', text: `定妆图已生成：${character.name}` });
+        } catch (error) {
+          character.portrait = { error: error.message, at: Date.now() };
+          changed = true;
+          event(project, { kind: 'portrait-error', stage: 'characters', text: `定妆图失败（${character.name}）：${error.message}` });
+        }
+        await store.save(project, { pipeline: true });
       }
-      await store.save(project, { pipeline: true });
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
     if (changed) await store.writeArtifact(project, 'characters', artifact);
   }
 
@@ -874,12 +1209,19 @@ export function apply(ctx, config = {}) {
     record.artifact = { tasks, takes, startedAt: Date.now() };
 
     // 1) 提交（已完成的段直接复用，不重复花钱）
+    const lineBeats = new Set((Array.isArray(storyboard.beats) ? storyboard.beats : [])
+      .filter((beat) => beat?.kind === 'line')
+      .map((beat) => String(beat.id)));
     for (const segment of segments) {
       const images = await referenceImages(segment, characters);
+      const basePrompt = forceSegmentId === segment.id && note
+        ? [segment.prompt, `本段返工要求：${note}`].join('\n\n')
+        : segment.prompt;
+      const hasDialogue = (segment.shots ?? []).some((shot) => (shot?.claims ?? [])
+        .some((id) => lineBeats.has(String(id))));
       const input = {
-        prompt: forceSegmentId === segment.id && note
-          ? [segment.prompt, `本段返工要求：${note}`].join('\n\n')
-          : segment.prompt,
+        // 有台词的段：画面里人物不开口，台词全部交给后期 TTS，避免嘴型和配音对不上。
+        prompt: hasDialogue ? silentPerformancePrompt(basePrompt) : basePrompt,
         mode: images.length > 0 ? 'ref2va' : 't2va',
         seconds: segment.duration,
         resolution: String(project.resolution || options.resolution),
@@ -1064,6 +1406,9 @@ export function apply(ctx, config = {}) {
       }
       const gate = await runGate('edit', edl, { render, project });
       record.gate = { ok: gate.ok, failures: (gate.failures ?? []).slice(0, 12), at: Date.now() };
+      if (edl.orderFixed) {
+        event(project, { kind: 'edit-order', stage: 'edit', text: '叙事顺序修正：模型把后面的段提前了，已按分镜段序排回（只有 ≤2 秒的片头钩子允许前置）' });
+      }
       await store.writeArtifact(project, 'edit', edl);
 
       if (!gate.ok) {
@@ -1091,6 +1436,13 @@ export function apply(ctx, config = {}) {
           });
         }
         output = await executeEdl(project, edl, completed, placed.lines);
+        if (edl.audio?.bgm && !output.bgm) {
+          event(project, {
+            kind: 'bgm-missing',
+            stage: 'edit',
+            text: `BGM 没匹配到文件（${options.bgmDir || '未配置 bgmDir'}）：成片只有对白；在 bgmDir 放几首情绪词对得上的曲子`,
+          });
+        }
         record.finalFile = output.finalFile;
         record.coverFile = output.coverFile;
         record.duration = output.duration;
@@ -1193,12 +1545,20 @@ export function apply(ctx, config = {}) {
         accepted: review.acceptedWithNotes ? 'with-notes' : 'clean',
         at: Date.now(),
       };
-      // 画面验收有 blocker 就是不过：文本审核看不出的硬伤，以看图的结论为准。
+      // 画面验收只有 blocker 一票否决；major/minor 只记建议——手部穿模、纸上文字这类
+      // AI 画面瑕疵很常见，判成 major 就否决会无限重做（而且模型重生成也未必更好）。
+      const visualBlockers = (visual?.issues ?? []).filter((issue) => issue.severity === 'blocker');
       if (visual && visual.pass === false) {
-        review.pass = false;
-        review.issues = [...(visual.issues ?? []), ...(review.issues ?? [])];
-        review.summary = `画面验收未过：${visual.summary || visual.issues?.[0]?.problem || ''}${review.summary ? `｜${review.summary}` : ''}`;
-        record.review = { score: review.score, pass: false, dimensions: review.dimensions, summary: review.summary, at: Date.now() };
+        if (visualBlockers.length > 0) {
+          review.pass = false;
+          review.issues = [...(visual.issues ?? []), ...(review.issues ?? [])];
+          review.summary = `画面验收未过：${visual.summary || visual.issues?.[0]?.problem || ''}${review.summary ? `｜${review.summary}` : ''}`;
+          record.review = { score: review.score, pass: false, dimensions: review.dimensions, summary: review.summary, at: Date.now() };
+        } else {
+          review.issues = [...(visual.issues ?? []), ...(review.issues ?? [])];
+          review.summary = `画面建议：${visual.summary || ''}${review.summary ? `｜${review.summary}` : ''}`;
+          record.review = { score: review.score, pass: review.pass, dimensions: review.dimensions, summary: review.summary, at: Date.now() };
+        }
       }
       // 逐帧体检的硬问题同样一票否决：确定性 / 渲染层面的错，模型打分看不出来。
       if (openfilmQa && openfilmQa.errors?.length) {
@@ -1227,7 +1587,7 @@ export function apply(ctx, config = {}) {
       record.issues = issues;
       event(project, { kind: 'stage-rework', stage: 'edit', text: `终审 ${review.score} 分没过，打回重剪` });
       await store.save(project, { pipeline: true });
-      if (visual?.pass === false && visual.issues?.some((issue) => issue.action === 'segment' && ['blocker', 'major'].includes(issue.severity))) break;
+      if (visual?.issues?.some((issue) => issue.severity === 'blocker' && issue.action === 'segment')) break;
     }
 
     record.status = 'needs_review';
@@ -1442,7 +1802,9 @@ export function apply(ctx, config = {}) {
     const results = [];
     try {
       let project = await store.load(id);
-      const startIndex = from ? STAGE_IDS.indexOf(from) : STAGE_IDS.findIndex((stage) => project.stages[stage]?.status !== 'done');
+      // skipped 也算「有结论」：剧本模式下创意阶段是主动跳过的，不能因此每次重跑。
+      const settled = (stage) => ['done', 'skipped'].includes(project.stages[stage]?.status);
+      const startIndex = from ? STAGE_IDS.indexOf(from) : STAGE_IDS.findIndex((stage) => !settled(stage));
       if (startIndex < 0) return { ok: true, results: [], message: '所有阶段都已完成' };
       const planned = only && from ? [from] : STAGE_IDS.slice(startIndex);
 
@@ -1464,7 +1826,7 @@ export function apply(ctx, config = {}) {
           event(project, { kind: 'stage-stale', stage, text: `${STAGE_BY_ID[stage].label}的旧产物作废，重跑：${staleReason}` });
           await store.save(project, { pipeline: true });
         }
-        if (stage !== 'render' && stage !== 'edit' && project.stages[stage]?.status === 'done' && !note && !staleReason) {
+        if (stage !== 'render' && stage !== 'edit' && settled(stage) && !note && !staleReason) {
           results.push({ stage, skipped: true });
           continue;
         }
@@ -1501,9 +1863,31 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * 导演确认门控：项目里有想法/剧本，但导演的问题还没答完时，不许开跑。
+   * assumeDefaults = 全部按推荐值收下，然后放行。
+   */
+  async function ensureIntake(project, { assumeDefaults = false } = {}) {
+    const id = project.id;
+    if (!project.source?.text || project.intake?.status === 'done') return { ok: true };
+    if (assumeDefaults) {
+      if (project.intake?.status !== 'ready') {
+        const ran = await handlers.intake({ id });
+        if (!ran.ok) return ran;
+      }
+      const done = await handlers.intakeAnswer({ id, useDefaults: true });
+      return done.ok ? { ok: true } : done;
+    }
+    if (!project.intake || ['idle', 'failed'].includes(project.intake.status)) {
+      const ran = await handlers.intake({ id });
+      if (!ran.ok) return ran;
+      return fail('need-intake', '导演先确认几件事：答完（或选「全部用默认」）再开跑', { intake: ran.value.intake });
+    }
+    return fail('need-intake', '先答完导演这几个问题（或选「全部用默认」）', { intake: project.intake });
+  }
+
   /** 后台跑，路由/工具立刻返回，面板靠 /state 轮询进度。 */
-  function startPipeline(id, optionsForRun) {
-    if (jobs.has(id)) return null;
+  function startPipeline(id, optionsForRun) {    if (jobs.has(id)) return null;
     const controller = new AbortController();
     // 先登记再进 runPipeline（internal 模式不会重复登记）。
     beginJob(id, { id, stage: optionsForRun?.from ?? 'idea', startedAt: Date.now(), controller });
@@ -1586,6 +1970,9 @@ export function apply(ctx, config = {}) {
         reaCmd: options.reaVideoCmd || '',
         scriptsDir: options.scriptsDir,
         bgmDir: options.bgmDir,
+        // 长视频拉片：面板显示默认只拆多少秒。
+        referenceMaxSeconds: Number(options.referenceMaxSeconds) || 0,
+        referenceStartSeconds: Number(options.referenceStartSeconds) || 0,
         ffmpegPath: media.ffmpeg,
         stages: STAGES.map((stage) => ({ id: stage.id, label: stage.label, agent: stage.agent })),
         dimensions: SIX_DIMENSIONS,
@@ -1611,7 +1998,7 @@ export function apply(ctx, config = {}) {
       }));
     },
 
-    /** 提示词模板：列出现有覆盖文件（没写就是内置写法） */
+    /** 提示词模板：列出现有覆盖文件（没写就是内置写法），并把内置指令原文一并交出去。 */
     async prompts() {
       const names = ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit', 'reviewer'];
       const items = names.map((name) => {
@@ -1622,7 +2009,7 @@ export function apply(ctx, config = {}) {
         } catch {
           content = '';
         }
-        return { name, content, custom: Boolean(String(content).trim()) };
+        return { name, content, custom: Boolean(String(content).trim()), builtin: builtinPrompt(name) };
       });
       return ok({ dir: promptsDir, items });
     },
@@ -1645,7 +2032,12 @@ export function apply(ctx, config = {}) {
 
     async projects() {
       const all = await store.list();
-      return ok({ projects: all.filter((row) => row.kind !== 'reference') });
+      // 两种记录都交回去：面板顶部按 kind 分开计数，用户能一眼看到「拉片记录」也算数据，
+      // 不会出现「0 个项目但拉片台里还躺着东西」的错觉。
+      return ok({
+        projects: all,
+        referenceCount: all.filter((row) => row.kind === 'reference').length,
+      });
     },
 
     /** 拉片台：独立拉片（不依赖创意项目），记录也落在同一个项目目录下，kind=reference。 */
@@ -1662,7 +2054,7 @@ export function apply(ctx, config = {}) {
       await store.save(project);
       event(project, { kind: 'create', text: '拉片台：新建拉片记录' });
       await store.save(project);
-      startReferenceJob(project, { url, localPath });
+      startReferenceJob(project, { url, localPath, ...parseReferenceWindowInput(payload) });
       return ok({ id: project.id, started: true });
     },
 
@@ -1674,7 +2066,12 @@ export function apply(ctx, config = {}) {
     /** 拉片证据包：联系表 / 逐镜帧 / 台词 / 报告 / 复刻分镜。 */
     async referenceEvidence(payload) {
       const id = String(payload?.id ?? '');
-      const project = await store.load(id);
+      let project;
+      try {
+        project = await store.load(id);
+      } catch {
+        return fail('not-found', '这条拉片记录已经不存在了（可能已被删除），刷新一下列表');
+      }
       const ref = project.reference ?? {};
       let replicate = null;
       if (ref.replicateFile && existsSync(ref.replicateFile)) {
@@ -1688,7 +2085,7 @@ export function apply(ctx, config = {}) {
         kind: project.kind ?? 'studio',
         status: ref.status ?? 'idle',
         stage: ref.stage ?? '',
-        error: ref.error ?? null,
+        error: ref.error ? compactMessage(ref.error, { max: 600 }) : null,
         url: ref.url ?? '',
         summary: ref.summary ?? null,
         shotTable: ref.shotTable ?? '',
@@ -1698,6 +2095,8 @@ export function apply(ctx, config = {}) {
         report,
         rea: ref.rea ?? null,
         reaError: ref.reaError ?? null,
+        window: ref.window ?? null,
+        originalDuration: ref.originalDuration ?? null,
         replicate,
         replicateSummary: ref.replicateSummary ?? null,
       });
@@ -1753,57 +2152,179 @@ export function apply(ctx, config = {}) {
       return ok({ id: project.id, project });
     },
 
+    /**
+     * 新建项目：一个想法、一段剧本，或者（老用法）一份产品画像。
+     * 有原文的项目先不跑流水线：导演读一遍、问几句，答完再开工。
+     */
     async create(payload) {
+      const rawText = String(payload?.script ?? payload?.idea ?? payload?.text ?? '').trim();
+      const brief = { ...(payload?.brief ?? {}) };
+      const sourceKind = payload?.script ? 'script' : payload?.idea ? 'idea' : (payload?.sourceKind === 'script' ? 'script' : 'idea');
+      if (!brief.productName && !rawText) return fail('bad-request', '给一句话想法、一段剧本，或至少一个产品名');
+      const autoTitle = !String(payload?.title ?? '').trim();
       const project = newProject({
-        title: payload?.title,
+        title: String(payload?.title ?? '').trim() || brief.productName || titleFromText(rawText),
         platform: payload?.platform,
         targetSeconds: payload?.targetSeconds,
         aspect: payload?.aspect ?? options.aspectRatio,
         resolution: payload?.resolution ?? options.resolution,
-        brief: payload?.brief,
+        brief,
+        source: rawText ? { kind: sourceKind, text: rawText } : null,
       });
-      if (!project.brief.productName) return fail('bad-request', '产品名不能为空');
+      project.autoTitle = autoTitle;
       await store.save(project);
-      event(project, { kind: 'create', text: '项目已创建' });
+      event(project, {
+        kind: 'create',
+        text: rawText
+          ? `项目已创建：读的是${sourceKind === 'script' ? '一段剧本' : '一句话想法'}（${rawText.length} 字），先让导演确认`
+          : '项目已创建',
+      });
       await store.save(project);
       return ok({ id: project.id, project });
     },
 
-    /** 载入示例项目：把 demo 的媒体复制到项目目录，替换占位路径后存成一条完成的项目。 */
-    async createDemo() {
-      const demoDir = join(PKG_ROOT, 'demo');
-      const templateFile = join(demoDir, 'project.template.json');
-      if (!existsSync(templateFile)) return fail('not-ready', '示例项目缺失：包里没有 demo/project.template.json');
-      const template = JSON.parse(await readFile(templateFile, 'utf8'));
-      const project = newProject({
-        title: template.title,
-        platform: template.platform,
-        targetSeconds: template.targetSeconds,
-        aspect: template.aspect,
-        resolution: template.resolution,
-        brief: template.brief,
-      });
-      const dir = store.dirOf(project.id);
-      const { template: filled } = await materializeDemo({ demoDir, dir });
-      project.brief = { ...project.brief, ...filled.brief };
-      project.chosenIdea = filled.chosenIdea;
-      project.stages = filled.stages;
-      project.finalFile = filled.finalFile;
-      project.coverFile = filled.coverFile;
-      project.demo = filled.demo;
-      event(project, { kind: 'demo', text: '示例项目已载入：可以直接看成片，也可以从任意阶段重跑' });
-      await store.save(project);
-      for (const stage of ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit']) {
-        const artifact = filled.stages?.[stage]?.artifact;
-        if (artifact) await store.writeArtifact(project, stage, artifact).catch(() => {});
+    /**
+     * 导演确认：读项目里的想法/剧本，填能填的画像，返回最多 4 个带默认值的问题。
+     * 幂等：再调一次就是「重新理解」，已有的问答记录不删（面板会提示会覆盖本轮问题）。
+     */
+    async intake(payload) {
+      const id = String(payload?.id ?? '');
+      if (!/^cs_[A-Za-z0-9_-]+$/.test(id)) return fail('bad-request', '项目 id 不合法');
+      let project;
+      try {
+        project = await store.load(id);
+      } catch {
+        return fail('not-found', '项目不存在或已删除');
       }
-      return ok({ id: project.id, dir });
+      if (jobs.has(id)) return fail('busy', '这个项目正在跑，等它跑完再改方向');
+      if (!project.source?.text) {
+        return fail('not-ready', '这个项目里没有想法或剧本可读：新建时贴一段，或在「项目画像」里补一句再让导演读');
+      }
+      await store.update(id, (fresh) => {
+        fresh.intake = { ...(fresh.intake ?? {}), status: 'running', error: null, at: Date.now(), questions: [] };
+      });
+      let raw;
+      try {
+        raw = await agents.intake({ project });
+      } catch (error) {
+        const reason = friendlyError(error, '导演没能读懂这段素材');
+        await store.update(id, (fresh) => {
+          fresh.intake = { ...(fresh.intake ?? {}), status: 'failed', error: reason, at: Date.now() };
+          event(fresh, { kind: 'intake-error', text: `导演确认失败：${reason}` });
+        });
+        return fail('intake-failed', reason);
+      }
+      const result = normalizeIntakeResult(raw, project);
+      const updated = await store.update(id, (fresh) => {
+        fresh.brief = { ...fresh.brief, ...result.brief };
+        if (result.projectPatch.targetSeconds) fresh.targetSeconds = result.projectPatch.targetSeconds;
+        if (result.projectPatch.platform) fresh.platform = result.projectPatch.platform;
+        if (result.projectPatch.aspect) fresh.aspect = result.projectPatch.aspect;
+        if (result.kind === 'script' && fresh.source) {
+          fresh.source = { ...fresh.source, kind: 'script' };
+          // 剧本已经写好：创意发散没有意义，直接按原台词整理剧情。
+          if (!fresh.stages.idea?.artifact) {
+            fresh.stages.idea = { ...fresh.stages.idea, status: 'skipped', note: '已给剧本：跳过创意发散，按原台词整理剧情' };
+          }
+        }
+        if (result.title && fresh.autoTitle) {
+          fresh.title = result.title;
+          fresh.autoTitle = false;
+        }
+        fresh.intake = {
+          status: result.questions.length > 0 ? 'ready' : 'done',
+          summary: result.summary,
+          questions: result.questions,
+          answers: [],
+          at: Date.now(),
+          error: null,
+        };
+        event(fresh, {
+          kind: 'intake',
+          text: result.questions.length > 0
+            ? `导演读完了：${result.summary}（等你确认 ${result.questions.length} 件事）`
+            : `导演读完了：${result.summary}（没有要问的，可以直接开跑）`,
+        });
+      });
+      return ok({
+        id,
+        intake: updated.intake,
+        questions: updated.intake?.questions ?? [],
+        project: {
+          id: updated.id,
+          title: updated.title,
+          brief: updated.brief,
+          targetSeconds: updated.targetSeconds,
+          platform: updated.platform,
+          aspect: updated.aspect,
+        },
+      });
+    },
+
+    /** 逐条回答导演的问题；useDefaults 一次把剩下的都按推荐值收下。答完即解锁开跑。 */
+    async intakeAnswer(payload) {
+      const id = String(payload?.id ?? '');
+      if (!/^cs_[A-Za-z0-9_-]+$/.test(id)) return fail('bad-request', '项目 id 不合法');
+      const useDefaults = payload?.useDefaults === true;
+      const incoming = Array.isArray(payload?.answers) ? payload.answers : [];
+      let updated;
+      try {
+        updated = await store.update(id, (fresh) => {
+          const intake = fresh.intake ?? { status: 'ready', questions: [], answers: [] };
+          const remaining = [...(intake.questions ?? [])];
+          const answers = [...(intake.answers ?? [])];
+          const take = (question, value) => {
+            if (!question) return;
+            const resolved = String(value ?? '').trim() || question.default;
+            if (!applyIntakeAnswer(fresh, question.field, resolved)) return;
+            answers.push({ id: question.id, field: question.field, value: resolved, at: Date.now() });
+          };
+          if (useDefaults) {
+            for (const question of remaining) take(question, question.default);
+            remaining.length = 0;
+          } else {
+            for (const answer of incoming) {
+              const index = remaining.findIndex((question) => question.id === String(answer?.id ?? ''));
+              if (index < 0) continue;
+              const [question] = remaining.splice(index, 1);
+              take(question, answer?.value);
+            }
+          }
+          intake.questions = remaining;
+          intake.answers = answers;
+          intake.at = Date.now();
+          intake.status = remaining.length > 0 ? 'ready' : 'done';
+          fresh.intake = intake;
+          if (remaining.length === 0) event(fresh, { kind: 'intake-done', text: '导演确认完毕，可以开跑了' });
+        });
+      } catch {
+        return fail('not-found', '项目不存在或已删除');
+      }
+      return ok({
+        id,
+        intake: updated.intake,
+        project: {
+          id: updated.id,
+          title: updated.title,
+          brief: updated.brief,
+          targetSeconds: updated.targetSeconds,
+          platform: updated.platform,
+          aspect: updated.aspect,
+        },
+      });
     },
 
     async state(payload) {
       const id = String(payload?.id ?? '');
       if (!id) return fail('bad-request', '缺少项目 id');
-      const project = await store.load(id);
+      let project;
+      try {
+        project = await store.load(id);
+      } catch {
+        // 项目被删了 / 目录被人手动清了：这是一条可预期的结果，不该把 fs 报错糊到面板上。
+        return fail('not-found', `项目不存在或已删除：${id}`);
+      }
+      const ref = project.reference ?? null;
       const artifacts = {};
       for (const stage of ['idea', 'story', 'storyboard', 'characters', 'voice', 'edit']) {
         const artifact = await store.artifact(project, stage).catch(() => null);
@@ -1828,17 +2349,27 @@ export function apply(ctx, config = {}) {
           aspect: project.aspect,
           resolution: project.resolution,
           brief: project.brief,
+          // 面板用 kind 判断「剧本模式」；原文不必整段传回，省得每次轮询都背几千字。
+          source: project.source ? { kind: project.source.kind, at: project.source.at, chars: project.source.text.length } : null,
+          intake: project.intake ?? null,
           stages: project.stages,
           chosenIdea: project.chosenIdea,
           pendingReview: project.pendingReview,
           running: project.running,
-          reference: project.reference && !referenceJobs.has(id)
-            && ['running', 'analyzing', 'fetching', 'framing', 'asr', 'rea', 'reviewing'].includes(project.reference.status)
-            ? { ...project.reference, status: 'failed', error: '拉片已中断，请重新选择参考视频' }
-            : project.reference ?? null,
+          reference: ref && !referenceJobs.has(id)
+            && ['running', 'analyzing', 'fetching', 'framing', 'asr', 'rea', 'reviewing'].includes(ref.status)
+            ? { ...ref, status: 'failed', error: '拉片已中断，请重新选择参考视频' }
+            : ref
+              // 老记录里可能存着整段上游日志：读的时候再压一次，面板只显示一句。
+              ? { ...ref, error: ref.error ? compactMessage(ref.error, { max: 600 }) : null }
+              : null,
           finalFile: project.finalFile ?? project.stages.edit?.finalFile ?? null,
           coverFile: project.coverFile ?? project.stages.edit?.coverFile ?? null,
-          events: (project.events ?? []).slice(-80),
+          // 事件日志里的报错同样压一句：不然几百行的命令行会整段铺在面板上。
+          events: (project.events ?? []).slice(-80).map((entry) => ({
+            ...entry,
+            text: entry.text ? compactMessage(entry.text, { max: 400 }) : entry.text,
+          })),
           updatedAt: project.updatedAt,
         },
         artifacts,
@@ -1853,6 +2384,10 @@ export function apply(ctx, config = {}) {
       const patch = payload?.brief ?? {};
       const project = await store.update(id, (fresh) => {
         fresh.brief = { ...fresh.brief, ...patch, hotspots: Array.isArray(patch.hotspots) ? patch.hotspots.slice(0, 30) : fresh.brief.hotspots };
+        // 枚举字段在入口处归一，别让脏值进项目文件（tool 的 enum 只约束调用方）。
+        if (patch.projectMode) fresh.brief.projectMode = patch.projectMode === 'story' ? 'story' : 'promotion';
+        if (patch.audioMode) fresh.brief.audioMode = patch.audioMode === 'no-dialogue' ? 'no-dialogue' : 'dialogue';
+        if (payload?.aspect) fresh.aspect = String(payload.aspect);
         if (payload?.title) fresh.title = String(payload.title);
         if (payload?.targetSeconds) fresh.targetSeconds = Math.max(10, Math.min(180, Math.round(Number(payload.targetSeconds))));
         if (Array.isArray(patch.sellingPoints)) fresh.brief.sellingPoints = patch.sellingPoints.map(String).filter(Boolean);
@@ -1921,7 +2456,12 @@ export function apply(ctx, config = {}) {
         fresh.reference = { status: 'running', stage: '准备素材', url, localPath, at: Date.now() };
         event(fresh, { kind: 'reference', text: `开始拉片：${url || localPath}` });
       });
-      startReferenceJob(project, { url, localPath, advanced: payload?.advanced !== false });
+      startReferenceJob(project, {
+        url,
+        localPath,
+        advanced: payload?.advanced !== false,
+        ...parseReferenceWindowInput(payload),
+      });
       return ok({ started: true });
     },
 
@@ -1937,8 +2477,12 @@ export function apply(ctx, config = {}) {
     async run(payload) {
       const id = String(payload?.id ?? '');
       if (!id) return fail('bad-request', '缺少项目 id');
-      const project = await store.load(id);
+      let project = await store.load(id);
       if (jobs.has(id)) return fail('busy', '这个项目正在跑');
+      const gate = await ensureIntake(project, { assumeDefaults: payload?.assumeDefaults === true });
+      if (!gate.ok) return gate;
+      // 确认过程会改画像/时长：重新读一次再开跑。
+      project = await store.load(id);
       const from = payload?.stage && STAGE_IDS.includes(String(payload.stage)) ? String(payload.stage) : undefined;
       if (from) {
         await store.update(id, (fresh) => {
@@ -2122,13 +2666,52 @@ export function apply(ctx, config = {}) {
       return ok({ chosenIdea: project.chosenIdea });
     },
 
+    /**
+     * 删项目：目录 + 关联记录（复核通知 / 运行队列）一起清。
+     * 只删目录不动记录 = 项目没了但 inbox 里还留着它的复核条目，看起来就是「删了还有数据」。
+     */
     async remove(payload) {
       const id = String(payload?.id ?? '');
       if (!/^cs_[A-Za-z0-9_-]+$/.test(id)) return fail('bad-request', '项目 id 不合法');
-      if (jobs.has(id)) return fail('busy', '这个项目正在跑，跑完再删');
-      if (referenceJobs.has(id)) return fail('busy', '这条正在拉片，等它跑完再删');
-      await store.remove(id);
-      return ok({ removed: id });
+      if (jobs.has(id)) return fail('busy', '这个项目还在跑，等这一轮跑完再删');
+      if (referenceJobs.has(id)) return fail('busy', '这条还在拉片，等它跑完再删');
+      try {
+        await store.remove(id);
+      } catch (error) {
+        log(`删除项目失败（${id}）：`, error);
+        return fail('locked', friendlyError(error, '删除失败：文件可能正被别的程序占用'));
+      }
+      const purged = await traces.purge(id).catch((error) => {
+        log(`清理关联记录失败（${id}）：${error.message}`);
+        return { inbox: 0, queue: 0 };
+      });
+      log(`已删除项目 ${id}；清掉复核记录 ${purged.inbox} 条 / 队列 ${purged.queue} 条`);
+      return ok({ removed: id, purged });
+    },
+
+    /** 一键清空：所有创意项目 + 拉片记录 + 关联队列。正在跑的项目跳过，不硬删。 */
+    async removeAll() {
+      const rows = await store.list();
+      const removed = [];
+      const skipped = [];
+      for (const row of rows) {
+        if (jobs.has(row.id) || referenceJobs.has(row.id)) {
+          skipped.push({ id: row.id, title: row.title, reason: '正在跑，跑完再清' });
+          continue;
+        }
+        try {
+          await store.remove(row.id);
+          removed.push(row.id);
+        } catch (error) {
+          log(`清空时删除失败（${row.id}）：`, error);
+          skipped.push({ id: row.id, title: row.title, reason: friendlyError(error, '删除失败') });
+        }
+      }
+      const purged = await traces.purge(removed).catch(() => ({ inbox: 0, queue: 0 }));
+      // 没删掉的（被占用）留着它们的记录；顺带把指向「已经不存在的项目」的旧残留一起收掉。
+      await traces.sweep(skipped.map((item) => item.id)).catch(() => {});
+      log(`清空全部：删掉 ${removed.length} 个，跳过 ${skipped.length} 个；清掉复核 ${purged.inbox} 条 / 队列 ${purged.queue} 条`);
+      return ok({ removed, skipped, purged });
     },
 
     async inbox() {
@@ -2144,7 +2727,12 @@ export function apply(ctx, config = {}) {
     async media(payload) {
       const id = String(payload?.id ?? '');
       const kind = String(payload?.kind ?? 'final');
-      const project = await store.load(id);
+      let project;
+      try {
+        project = await store.load(id);
+      } catch {
+        return fail('not-found', '项目不存在或已删除');
+      }
       let file;
       if (kind === 'final') file = project.finalFile ?? project.stages.edit?.finalFile;
       else if (kind === 'cover') file = project.coverFile ?? project.stages.edit?.coverFile;
@@ -2188,8 +2776,13 @@ export function apply(ctx, config = {}) {
       try {
         return sendJson(res, 200, await handler(payload));
       } catch (error) {
+        // 项目目录被删掉（或被人手动清理）是常见情况：给一条能懂的 not-found，
+        // 面板据此清掉选中项，而不是把 ENOENT 的原文怼在页面上。
+        if (error?.code === 'ENOENT') {
+          return sendJson(res, 404, fail('not-found', '项目不存在或已删除，刷新一下列表'));
+        }
         log(`${endpoint} 失败：`, error);
-        return sendJson(res, 500, fail('internal', error instanceof Error ? error.message : String(error)));
+        return sendJson(res, 500, fail('internal', friendlyError(error, '操作失败，请重试')));
       }
     },
   }), 'creative-studio: api routes');
@@ -2318,21 +2911,27 @@ export function apply(ctx, config = {}) {
   const newTool = {
     name: 'creative_studio_new',
     description:
-      '在创意工作台新建一个项目：填产品画像（产品名/品类/人群/卖点/调性/禁用词）和拍摄目标，得到一个项目 id。之后用 creative_studio_run 跑流水线（创意 idea → 剧情 → 分镜 → 人物六维 → 配音 → 出片 → 成片剪辑）。热点不用手填：面板里能一键抓，或先建项目再让宿主抓。',
+      '在创意工作台新建项目。最省事的用法：只给 idea（一句话想法）或 script（整段剧本），别的一概不用填。建好后会自动让导演读一遍，返回 1–4 个带默认值的问题；用 creative_studio_intake 逐条回答（或 useDefaults:true 全收），再 creative_studio_run 开跑。也可以直接给结构化画像字段。',
     parameters: {
       type: 'object',
       additionalProperties: false,
-      required: ['title', 'productName'],
+      required: [],
       properties: {
-        title: { type: 'string', description: '项目名，例如「清汤面·深夜面馆 45 秒」' },
-        productName: { type: 'string', description: '产品名' },
+        idea: { type: 'string', description: '一句话想法（最常用）：想拍什么、给谁看，说人话就行' },
+        script: { type: 'string', description: '整段剧本原文：按场次/台词贴进来，剧情会按原样拍' },
+        productName: { type: 'string', description: '产品名 / 作品名；有 idea 或 script 时可以省略（导演会读出来）' },
+        title: { type: 'string', description: '项目名；省略则按想法首句自动生成' },
         category: { type: 'string', description: '品类，例如「地方小吃到店体验」' },
         audience: { type: 'string', description: '目标人群' },
         sellingPoints: { type: 'array', items: { type: 'string' }, description: '核心卖点，逐条写' },
         tone: { type: 'string', description: '调性，例如「克制的温情，不要叫卖」' },
+        priceBand: { type: 'string', description: '价格带，例如「15–25 元」；会进创意与分镜提示词' },
         forbidden: { type: 'array', items: { type: 'string' }, description: '客户禁用词' },
+        projectMode: { type: 'string', enum: ['promotion', 'story'], description: '制作类型：promotion 推广片（默认）/ story 剧情短片（不要求销售对象）' },
+        audioMode: { type: 'string', enum: ['dialogue', 'no-dialogue'], description: '声音形式：dialogue 有台词（默认）/ no-dialogue 无台词（跳过配音方案）' },
         targetSeconds: { type: 'integer', minimum: 10, maximum: 180, description: '目标时长（秒），默认 45' },
         platform: { type: 'string', enum: ['douyin', 'shipinhao', 'xiaohongshu', 'bilibili'], description: '投放平台，默认 douyin' },
+        aspect: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', '4:5', '5:4'], description: '画幅；省略则用全局配置' },
         hotspots: {
           type: 'array',
           description: '可选：已经拿到的热点（不传就等面板抓）',
@@ -2344,13 +2943,22 @@ export function apply(ctx, config = {}) {
         },
       },
     },
-    timeoutMs: 120_000,
+    timeoutMs: 180_000,
     async execute(args) {
+      const rawText = String(args.script ?? args.idea ?? '').trim();
+      const sourceKind = args.script ? 'script' : 'idea';
+      if (!rawText && !String(args.productName ?? '').trim()) {
+        throw new Error('给一句话想法（idea）、一段剧本（script），或至少一个产品名');
+      }
+      const seconds = Number(args.targetSeconds) || 45;
+      const title = String(args.title ?? '').trim()
+        || String(args.productName ?? '').trim()
+        || (rawText ? titleFromText(rawText) : `新项目 · ${seconds} 秒`);
       const project = newProject({
-        title: args.title,
+        title,
         platform: args.platform,
         targetSeconds: args.targetSeconds,
-        aspect: options.aspectRatio,
+        aspect: args.aspect || options.aspectRatio,
         resolution: options.resolution,
         brief: {
           productName: args.productName,
@@ -2358,18 +2966,138 @@ export function apply(ctx, config = {}) {
           audience: args.audience,
           sellingPoints: args.sellingPoints,
           tone: args.tone,
+          priceBand: args.priceBand,
           forbidden: args.forbidden,
+          projectMode: args.projectMode,
+          audioMode: args.audioMode,
           hotspots: (args.hotspots ?? []).map((hotspot) => ({ title: String(hotspot.title ?? ''), source: String(hotspot.source ?? '手动'), heat: hotspot.heat ?? null })),
         },
+        source: rawText ? { kind: sourceKind, text: rawText } : null,
       });
+      project.autoTitle = !String(args.title ?? '').trim();
       await store.save(project);
-      event(project, { kind: 'create', text: '项目已创建（Agent）' });
+      event(project, { kind: 'create', text: rawText ? `项目已创建：读的是用户给的${sourceKind === 'script' ? '剧本' : '想法'}，先让导演确认` : '项目已创建（Agent）' });
       await store.save(project);
-      return { id: project.id, dir: store.dirOf(project.id), title: project.title, targetSeconds: project.targetSeconds };
+
+      // 有原文就直接让导演读：宿主拿到的不是一张空表，而是一组带默认值的问题。
+      let intake = null;
+      if (rawText) {
+        const read = await handlers.intake({ id: project.id });
+        if (read.ok) intake = read.value.intake;
+        else intake = { status: 'failed', error: read.error.message, questions: [], summary: '' };
+      }
+      const fresh = await store.load(project.id).catch(() => project);
+      return {
+        id: project.id,
+        dir: store.dirOf(project.id),
+        title: fresh.title,
+        targetSeconds: fresh.targetSeconds,
+        sourceKind: rawText ? sourceKind : null,
+        brief: fresh.brief,
+        intake,
+      };
     },
     output: {
       schema: { type: 'object', additionalProperties: true },
-      render: (_args, value) => textBlocks(`项目已建：${value.id}\n目录：${value.dir}\n下一步：creative_studio_run（可以 stage=idea 只跑创意，也可以不传 stage 跑全流程）`),
+      render: (_args, value) => {
+        const lines = [`项目已建：${value.id}`, `目录：${value.dir}`];
+        if (value.sourceKind === 'script') lines.push('模式：剧本（跳过创意发散，按原台词整理剧情）');
+        const intake = value.intake;
+        if (intake?.summary) lines.push(`导演理解：${intake.summary}`);
+        if (intake?.status === 'failed') lines.push(`⚠ 导演没读懂：${intake.error}`);
+        const questions = intake?.questions ?? [];
+        if (questions.length > 0) {
+          lines.push('', '需要你确认（每条都有推荐值，可以一句「都用默认」）：');
+          for (const [index, question] of questions.entries()) {
+            const options = (question.options ?? []).map((option) => (option.value === question.default ? `【${option.label}】` : option.label)).join(' / ');
+            lines.push(`${index + 1}. ${question.question}${options ? `（${options}）` : ''} — 推荐：${question.default}`);
+          }
+          lines.push('', '下一步：creative_studio_intake（传 answers 或 useDefaults:true）→ creative_studio_run');
+        } else if (intake && intake.status !== 'failed') {
+          lines.push('', '导演没有要问的。下一步：creative_studio_run');
+        } else if (intake?.status === 'failed') {
+          lines.push('', '导演没读懂这段素材：可以让用户补一句，或直接 creative_studio_new 再给一版更具体的想法/剧本');
+        } else {
+          lines.push('', '下一步：creative_studio_run');
+        }
+        return textBlocks(lines.join('\n'));
+      },
+    },
+  };
+
+  const intakeTool = {
+    name: 'creative_studio_intake',
+    description:
+      '查看或回答创意工作台的「导演确认」问题。不传 answers 就返回当前还待确认的问题；传 answers（[{id,value}]）逐条回答，或 useDefaults:true 一次收下所有推荐值。答完 creative_studio_run 才会开跑。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id'],
+      properties: {
+        id: { type: 'string', description: '项目 id' },
+        answers: {
+          type: 'array',
+          description: '逐条回答：id 是问题 id，value 是选项 value 或自由文本；省略则沿用该问题的推荐值',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id'],
+            properties: { id: { type: 'string' }, value: { type: 'string' } },
+          },
+        },
+        useDefaults: { type: 'boolean', description: 'true = 剩下所有问题都按推荐值收下' },
+      },
+    },
+    timeoutMs: 180_000,
+    async execute(args) {
+      const id = String(args?.id ?? '');
+      let project;
+      try {
+        project = await store.load(id);
+      } catch {
+        return { error: '项目不存在或已删除' };
+      }
+      let intake = project.intake;
+      // 还没读过（或上次读失败）先让导演读一遍，别让调用方自己拼流程。
+      if (project.source?.text && (!intake || intake.status === 'idle' || intake.status === 'failed')) {
+        const read = await handlers.intake({ id });
+        if (!read.ok) return { error: read.error.message, id };
+        intake = read.value.intake;
+      }
+      if (Array.isArray(args?.answers) || args?.useDefaults === true) {
+        const answered = await handlers.intakeAnswer({ id, answers: args.answers, useDefaults: args.useDefaults === true });
+        if (!answered.ok) return { error: answered.error.message, id };
+        intake = answered.value.intake;
+      }
+      const fresh = await store.load(id).catch(() => project);
+      return {
+        id,
+        status: intake?.status ?? 'idle',
+        summary: intake?.summary ?? '',
+        questions: intake?.questions ?? [],
+        brief: fresh.brief,
+        targetSeconds: fresh.targetSeconds,
+        platform: fresh.platform,
+      };
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        if (value.error) return textBlocks(`✗ ${value.error}`);
+        const lines = [`${value.id}｜导演确认：${value.status}`];
+        if (value.summary) lines.push(`理解：${value.summary}`);
+        const questions = value.questions ?? [];
+        if (questions.length === 0) {
+          lines.push('没有待确认的问题了。下一步：creative_studio_run');
+        } else {
+          lines.push('', '还差这些（回答时把 id 一起带上）：');
+          for (const [index, question] of questions.entries()) {
+            const options = (question.options ?? []).map((option) => `${option.label}=${option.value}`).join(' / ');
+            lines.push(`${index + 1}. [${question.id}] ${question.question}${options ? `（${options}）` : ''} — 推荐：${question.default}`);
+          }
+        }
+        return textBlocks(lines.join('\n'));
+      },
     },
   };
 
@@ -2389,7 +3117,7 @@ export function apply(ctx, config = {}) {
     async execute(args) {
       if (!args.id) {
         const projects = await store.list();
-        return { projects: projects.slice(0, 10).map((row) => ({ id: row.id, title: row.title, doneStages: row.doneStages, totalStages: row.totalStages, pendingReview: row.pendingReview ? row.pendingReview.stageLabel : null, running: row.running?.stage ?? null, updatedAt: row.updatedAt })) };
+        return { projects: projects.slice(0, 10).map((row) => ({ id: row.id, title: row.title, doneStages: row.doneStages, totalStages: row.totalStages, pendingReview: row.pendingReview ? row.pendingReview.stageLabel : null, intakePending: row.intakePending ?? 0, running: row.running?.stage ?? null, updatedAt: row.updatedAt })) };
       }
       const project = await store.load(String(args.id));
       const stages = STAGE_IDS.map((stage) => {
@@ -2411,6 +3139,11 @@ export function apply(ctx, config = {}) {
         id: project.id,
         title: project.title,
         targetSeconds: project.targetSeconds,
+        sourceKind: project.source?.kind ?? null,
+        // 还没确认完的项目：宿主和面板都要能直接看到还差哪几问。
+        intake: project.source
+          ? { status: project.intake?.status ?? 'idle', summary: project.intake?.summary ?? '', questions: project.intake?.questions ?? [] }
+          : null,
         stages,
         pendingReview: project.pendingReview ?? null,
         finalFile: project.finalFile ?? project.stages.edit?.finalFile ?? null,
@@ -2430,10 +3163,18 @@ export function apply(ctx, config = {}) {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => {
         if (Array.isArray(value.projects)) {
-          const lines = value.projects.map((row) => `${row.id}｜${row.title}｜${row.doneStages}/${row.totalStages} 阶段${row.running ? `｜正在跑 ${row.running}` : ''}${row.pendingReview ? `｜⚠ 待复核：${row.pendingReview}` : ''}`);
+          const lines = value.projects.map((row) => `${row.id}｜${row.title}｜${row.doneStages}/${row.totalStages} 阶段${row.running ? `｜正在跑 ${row.running}` : ''}${row.pendingReview ? `｜⚠ 待复核：${row.pendingReview}` : ''}${row.intakePending ? `｜⏳ 待确认 ${row.intakePending} 个问题` : ''}`);
           return textBlocks(lines.join('\n') || '还没有项目');
         }
         const lines = [`${value.title}（${value.id}）`];
+        if (value.intake && value.intake.status !== 'done') {
+          lines.push(`⏳ 导演确认：${value.intake.status}${value.intake.summary ? `｜${value.intake.summary}` : ''}`);
+          for (const question of value.intake.questions ?? []) {
+            const options = (question.options ?? []).map((option) => `${option.label}=${option.value}`).join(' / ');
+            lines.push(`   [${question.id}] ${question.question}${options ? `（${options}）` : ''} — 推荐：${question.default}`);
+          }
+          if ((value.intake.questions ?? []).length > 0) lines.push('   先答完（creative_studio_intake），再 creative_studio_run');
+        }
         for (const stage of value.stages ?? []) {
           const flag = stage.status === 'done' ? '✓' : stage.status === 'needs_review' ? '⚠' : stage.status === 'failed' ? '✗' : '·';
           lines.push(`${flag} ${stage.label}｜${stage.status}${stage.attempts > 1 ? `（第 ${stage.attempts} 版）` : ''}${stage.score !== null ? `｜审核 ${stage.score}` : ''}${stage.error ? `｜${stage.error}` : ''}`);
@@ -2454,7 +3195,7 @@ export function apply(ctx, config = {}) {
   const runTool = {
     name: 'creative_studio_run',
     description:
-      '跑创意工作台的流水线。不传 stage 就从第一个未完成阶段往下跑（含出片与成片剪辑）；传 stage 就从该阶段重跑。生产、剪辑、审核三个 Agent 会自动串起来，质量不过自动打回重做；重试用完仍不过会停下来，把项目标成待人工复核。出片与剪辑是长任务，工具会等到这一轮跑完或停在待复核。',
+      '跑创意工作台的流水线。不传 stage 就从第一个未完成阶段往下跑（含出片与成片剪辑）；传 stage 就从该阶段重跑。项目有想法/剧本但导演还没确认完时，这里不会硬跑：会返回 needIntake 和待确认问题，先用 creative_studio_intake 回答（或传 assumeDefaults:true 全部收下）。生产、剪辑、审核三个 Agent 会自动串起来，质量不过自动打回重做；重试用完仍不过会停下来，把项目标成待人工复核。出片与剪辑是长任务，工具会等到这一轮跑完或停在待复核。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -2464,6 +3205,7 @@ export function apply(ctx, config = {}) {
         stage: { type: 'string', enum: ['idea', 'story', 'storyboard', 'characters', 'voice', 'render', 'edit'], description: '从这个阶段开始跑；省略则从第一个未完成阶段开始' },
         note: { type: 'string', description: '给生产 Agent 的额外要求（例如「第三镜改成夜戏」）' },
         only: { type: 'boolean', description: '只跑 stage 这一个阶段就停（step-by-step 用）；省略则从该阶段一路跑到成片' },
+        assumeDefaults: { type: 'boolean', description: '导演确认的问题全部按推荐值收下再开跑（省一轮对话）' },
         wait: { type: 'boolean', description: '为 false 时立刻返回，进度用 creative_studio_status 查（默认等）' },
       },
     },
@@ -2471,6 +3213,19 @@ export function apply(ctx, config = {}) {
     async execute(args) {
       const id = String(args.id);
       const project = await store.load(id);
+      // 想法/剧本还没确认完：先把问题交回去，别一路跑到底。
+      const gate = await ensureIntake(project, { assumeDefaults: args.assumeDefaults === true });
+      if (!gate.ok) {
+        const intake = gate.error.details?.intake ?? null;
+        return {
+          needIntake: true,
+          id,
+          title: project.title,
+          message: gate.error.message,
+          summary: intake?.summary ?? '',
+          questions: intake?.questions ?? [],
+        };
+      }
       if (args.stage) {
         await store.update(id, (fresh) => {
           fresh.stages[args.stage] = { ...fresh.stages[args.stage], status: 'empty', error: null, issues: [] };
@@ -2491,6 +3246,16 @@ export function apply(ctx, config = {}) {
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => {
+        if (value.needIntake) {
+          const lines = [`${value.title ?? ''}｜${value.id ?? ''}`, `要先确认才能开跑：${value.message}`];
+          if (value.summary) lines.push(`导演理解：${value.summary}`);
+          for (const [index, question] of (value.questions ?? []).entries()) {
+            const options = (question.options ?? []).map((option) => `${option.label}=${option.value}`).join(' / ');
+            lines.push(`${index + 1}. [${question.id}] ${question.question}${options ? `（${options}）` : ''} — 推荐：${question.default}`);
+          }
+          lines.push('', '用 creative_studio_intake 回答（或 assumeDefaults:true 全部收下）');
+          return textBlocks(lines.join('\n'));
+        }
         if (value.started) return textBlocks(`已在后台开跑：${value.id}（用 creative_studio_status 查进度）`);
         const lines = [`${value.title ?? ''}｜${value.id ?? ''}`];
         for (const row of value.results ?? []) {
@@ -2767,6 +3532,8 @@ export function apply(ctx, config = {}) {
       properties: {
         url: { type: 'string', description: '抖音分享文案或链接；传 localPath 时可省' },
         localPath: { type: 'string', description: '本机视频文件绝对路径（先把抖音视频存到手机/电脑再传进来）。' },
+        startSeconds: { type: 'integer', minimum: 0, description: '长视频从第几秒开始截高光段；省略用配置 referenceStartSeconds（默认 0）' },
+        durationSeconds: { type: 'integer', minimum: 0, description: '只拆多少秒；省略用配置 referenceMaxSeconds（默认 120）。长视频会先截这一段再拆' },
         analyze: { type: 'boolean', description: '是否生成解析报告，默认 true' },
         replicate: { type: 'boolean', description: '是否同时生成复刻分镜 JSON，默认 false' },
       },
@@ -2781,7 +3548,7 @@ export function apply(ctx, config = {}) {
       });
       project.brief.productName = '拉片记录';
       await store.save(project);
-      await runReferenceJob(project, source);
+      await runReferenceJob(project, { ...source, ...parseReferenceWindowInput(args) });
       const fresh = await store.load(project.id);
       const ref = fresh.reference ?? {};
       if (ref.status !== 'done') throw new Error(ref.error ?? '拉片没有完成');
@@ -2797,6 +3564,8 @@ export function apply(ctx, config = {}) {
         title: String(ref.summary?.title ?? ''),
         duration: Number(ref.duration ?? 0),
         shotCount: Number(ref.shotCount ?? 0),
+        window: ref.window ?? null,
+        originalDuration: ref.originalDuration ?? null,
         ...(storyboard ? { storyboard, replicateSummary } : {}),
         report: String(ref.report ?? ''),
       };
@@ -2807,6 +3576,9 @@ export function apply(ctx, config = {}) {
         textBlocks(
           [
             `拆解完成：${value.title || value.dir}`,
+            value.window
+              ? `原片 ${Math.round((value.originalDuration ?? 0) / 60)} 分钟，只拆了 ${Math.floor(value.window.start / 60)}:${String(value.window.start % 60).padStart(2, '0')} 起的 ${value.window.seconds} 秒`
+              : '',
             `时长 ${value.duration}s · ${value.shotCount} 镜`,
             `产物目录：${value.dir}`,
             value.replicateSummary ? `复刻分镜：${value.replicateSummary.shots} 镜 / ${value.replicateSummary.segments} 段${value.replicateSummary.gate?.ok ? '（13 道门全绿）' : ''}` : '',
@@ -2874,7 +3646,11 @@ export function apply(ctx, config = {}) {
         audience: { type: 'string' },
         sellingPoints: { type: 'array', items: { type: 'string' } },
         tone: { type: 'string' },
+        priceBand: { type: 'string', description: '价格带，例如「15–25 元」' },
         forbidden: { type: 'array', items: { type: 'string' } },
+        projectMode: { type: 'string', enum: ['promotion', 'story'], description: '制作类型：promotion 推广片 / story 剧情短片' },
+        audioMode: { type: 'string', enum: ['dialogue', 'no-dialogue'], description: '声音形式：dialogue 有台词 / no-dialogue 无台词' },
+        aspect: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21', '4:5', '5:4'], description: '画幅（项目级，不是 brief）' },
         extra: { type: 'string', description: '补充要求（会进创意与分镜的提示词）' },
       },
     },
@@ -2884,13 +3660,17 @@ export function apply(ctx, config = {}) {
         id: args.id,
         title: args.title,
         targetSeconds: args.targetSeconds,
+        aspect: args.aspect,
         brief: {
           productName: args.productName,
           category: args.category,
           audience: args.audience,
           sellingPoints: args.sellingPoints,
           tone: args.tone,
+          priceBand: args.priceBand,
           forbidden: args.forbidden,
+          projectMode: args.projectMode,
+          audioMode: args.audioMode,
           extra: args.extra,
         },
       });
@@ -2906,6 +3686,7 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => {
     const disposers = [
       ctx.tools.register(newTool),
+      ctx.tools.register(intakeTool),
       ctx.tools.register(statusTool),
       ctx.tools.register(runTool),
       ctx.tools.register(decideTool),

@@ -26,8 +26,7 @@ export const VOICE_TTS = {
   v_f_bright:  { edge: 'zh-CN-XiaoyiNeural',   tint: +0.08, closed: 'FunAudioLLM/CosyVoice2-0.5B:diana' },
   v_f_calm:    { edge: 'zh-CN-XiaoxiaoNeural', tint: -0.08, closed: 'FunAudioLLM/CosyVoice2-0.5B:claire' },
   v_f_salt:    { edge: 'zh-CN-XiaoxiaoNeural', tint: -0.14, closed: 'FunAudioLLM/CosyVoice2-0.5B:fiona' },
-  v_f_playful: { edge: 'zh-CN-XiaoyiNeural',   tint: +0.14, closed: 'FunAudioLLM/CosyVoice2-0.5B:diana' },
-  v_m_steady:  { edge: 'zh-CN-YunxiNeural',    tint: -0.08, closed: 'FunAudioLLM/CosyVoice2-0.5B:alex' },
+  v_f_playful: { edge: 'zh-CN-XiaoyiNeural',   tint: +0.14, closed: 'FunAudioLLM/CosyVoice2-0.5B:diana' },  v_m_steady:  { edge: 'zh-CN-YunxiNeural',    tint: -0.08, closed: 'FunAudioLLM/CosyVoice2-0.5B:alex' },
   v_m_bright:  { edge: 'zh-CN-YunxiNeural',    tint: +0.06, closed: 'FunAudioLLM/CosyVoice2-0.5B:benjamin' },
   v_m_rough:   { edge: 'zh-CN-YunjianNeural',  tint: -0.06, closed: 'FunAudioLLM/CosyVoice2-0.5B:charles' },
   v_m_young:   { edge: 'zh-CN-YunxiaNeural',   tint: +0.02, closed: 'FunAudioLLM/CosyVoice2-0.5B:david' },
@@ -48,14 +47,14 @@ export const HARD_OVERFLOW_SEC = 0.6;
  * 比 edge 强的地方是有「苍老 / 沉稳 / 知性 / 温暖」这些真·音色区分，不用靠语速硬凑。
  */
 export const UNISOUND_VOICES = {
-  v_f_warm:    'cn_female_xiaodi_warm',          // 晓迪温暖
+  v_f_warm:    'cn_female_xiaodi_warm',          // 晓迪温暖（偏低，温软）
   v_f_bright:  'cn_female_shasha',               // 莎莎 清朗
   v_f_calm:    'cn_female_ruolin',               // 若琳 成熟
-  v_f_salt:    'cn_female_shasha_intellectual',  // 莎莎知性
-  v_f_playful: 'cn_female_jiajia',               // 佳佳 娴静
+  v_f_salt:    'cn_female_xiaodi_warm',          // 晓迪温暖（给长辈/夫人，配 pitch=偏低 压年龄）
+  v_f_playful: 'cn_female_jiajia',               // 佳佳（年轻、轻）
   v_m_steady:  'cn_male_chenyu_steady',          // 晨宇沉稳
   v_m_bright:  'cn_male_jingming',               // 景明 清朗
-  v_m_rough:   'cn_male_chenyu',                 // 晨宇（没有粗砂，靠语速压）
+  v_m_rough:   'cn_male_chenyu',                 // 晨宇（没有粗砂，靠语速/低音压）
   v_m_young:   'cn_male_chenyu_fluent',          // 晨宇流利
   v_m_anchor:  'cn_male_chenyu',                 // 晨宇（普通话基准）
   v_c_elder:   'cn_male_chenyu_elderly',         // 晨宇苍老
@@ -172,6 +171,15 @@ export async function synthesizeLines({
   const cache = await loadManifest(manifestFile);
   const lines = Array.isArray(voice?.lines) ? voice.lines : [];
   const mode = String(provider || engine || 'edge').toLowerCase();
+  // 人物音高：长辈压低、少女抬高。同一个音色靠 pitch 再拉开一点，避免「夫人和二娘一个嗓子」。
+  const pitchBySpeaker = new Map((Array.isArray(voice?.characters) ? voice.characters : [])
+    .map((character) => [String(character?.name ?? ''), String(character?.pitch ?? '')]));
+  const pitchOf = (speaker) => {
+    const hint = pitchBySpeaker.get(String(speaker ?? '')) ?? '';
+    if (/偏低/.test(hint)) return 40;
+    if (/偏高/.test(hint)) return 60;
+    return 50;
+  };
 
   if (lines.length === 0) {
     return { engine: mode, python, script, lines: [], warnings: [], hard: [], skipped: 'no-dialogue' };
@@ -197,7 +205,7 @@ export async function synthesizeLines({
     if (!text) continue;
 
     const file = join(dir, `${safeName(beatId)}.mp3`);
-    const signature = [mode, text, voiceId, baseRate, engine].join('|');
+    const signature = [mode, text, voiceId, baseRate, engine, UNISOUND_VOICES[voiceId] ?? '', pitchOf(line?.speaker)].join('|');
     const cached = cache[beatId];
     const slotSec = Number(slot?.slotSec) || 0;
     let seconds = 0;
@@ -215,7 +223,8 @@ export async function synthesizeLines({
         if (mode === 'unisound') {
           args = [adapter, '--text', text, '-o', file,
             '--voice-id', UNISOUND_VOICES[voiceId] ?? 'cn_male_chenyu',
-            '--speed', String(unisoundSpeed(useRate))];
+            '--speed', String(unisoundSpeed(useRate)),
+            '--pitch', String(pitchOf(line?.speaker))];
           if (String(apiKey).trim()) args.push('--key', String(apiKey).trim());
           if (baseUrl) args.push('--base-url', String(baseUrl));
           const emotion = emotionEnum(line?.emotion);

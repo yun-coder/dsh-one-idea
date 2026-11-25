@@ -7,13 +7,21 @@
  *   node test/openfilm.test.mjs
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { createMedia } from '../engine/media.js';
 import { createOpenFilmFinisher } from '../engine/openfilm.js';
+
+// OpenFilm render 依赖 Playwright 的 chromium；没有就直接跳过，别在测试里等它下载浏览器。
+const playwrightRoot = join(process.env.LOCALAPPDATA ?? '', 'ms-playwright');
+const hasChromium = existsSync(playwrightRoot) && readdirSync(playwrightRoot).some((name) => /^chromium/i.test(name));
+if (!hasChromium) {
+  console.log('跳过：本机没装 Playwright Chromium，OpenFilm render 会在渲染现场下载浏览器（通常卡很久）。');
+  process.exit(0);
+}
 
 const media = createMedia({});
 

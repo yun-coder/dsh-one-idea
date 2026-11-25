@@ -79,6 +79,26 @@ export function newProject(input = {}) {
       audioMode: input.brief?.audioMode === 'no-dialogue' ? 'no-dialogue' : 'dialogue',
       projectMode: input.brief?.projectMode === 'story' ? 'story' : 'promotion',
     },
+    /**
+     * 用户塞进来的原始素材：一句话想法，或一整段剧本。
+     * 导演 Agent 从它读画像；剧本模式下流水线跳过创意发散，按原台词结构化。
+     */
+    source: input.source?.text
+      ? {
+        kind: input.source.kind === 'script' ? 'script' : 'idea',
+        text: String(input.source.text),
+        at: now,
+      }
+      : null,
+    /** 导演确认：问题不清楚就不开跑，但问题必须带着默认值，让人一句话答完。 */
+    intake: {
+      status: 'idle', // idle | running | ready | done | failed
+      summary: '',
+      questions: [],
+      answers: [],
+      at: null,
+      error: null,
+    },
     chosenIdea: null,
     stages: Object.fromEntries(STAGE_IDS.map((stage) => [stage, emptyStage()])),
     pendingReview: null,
@@ -137,6 +157,9 @@ export function createStore({ root, isRunning = () => false }) {
     async load(id) {
       const text = await readFile(projectFile(id), 'utf8');
       const project = JSON.parse(text);
+      // 老项目没有这两个字段：补上默认值，读的时候按「没确认过」处理。
+      if (!project.intake) project.intake = { status: 'idle', summary: '', questions: [], answers: [], at: null, error: null };
+      if (!project.source) project.source = null;
       if (isRunning(id)) return project;
       // 重启后不认「进行中」：交给用户或下一次运行重新推。
       for (const stage of STAGE_IDS) {
@@ -203,6 +226,11 @@ export function createStore({ root, isRunning = () => false }) {
             pendingReview: project.pendingReview ?? null,
             running: isRunning(project.id) ? project.running ?? null : null,
             finalFile: project.finalFile ?? null,
+            // 面板据此在列表上标「等你确认」：有想法，但导演的问题还没答完。
+            intakePending: project.source && project.intake?.status !== 'done'
+              ? (project.intake?.questions ?? []).length
+              : 0,
+            sourceKind: project.source?.kind ?? null,
           });
         } catch {
           // 不是项目目录 / JSON 坏了：跳过，不阻塞列表
@@ -243,8 +271,25 @@ export function createStore({ root, isRunning = () => false }) {
       return stat(join(dirOf(id), relative));
     },
 
+    /**
+     * 删项目目录。Windows 上刚播完的视频、刚退出的 ffmpeg/浏览器可能还占着句柄，
+     * 一次失败就把半个目录留在盘上——这里退几步再重试，失败时把系统错误码原样抛出，
+     * 由上层翻译成人话（别把 EPERM 的堆栈丢给面板）。
+     */
     async remove(id) {
-      await rm(dirOf(id), { recursive: true, force: true });
+      const dir = dirOf(id);
+      let lastError = null;
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 120 });
+          return dir;
+        } catch (error) {
+          lastError = error;
+          if (!['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY', 'EMFILE'].includes(error?.code ?? '')) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 180 * attempt));
+        }
+      }
+      throw lastError;
     },
   };
 }

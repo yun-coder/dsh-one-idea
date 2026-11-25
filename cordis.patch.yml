@@ -27,8 +27,9 @@
         resolution: '720p'
         videoModel: 'minimax-h3-mini'
         # ---- 出片后端 ----
-        # auto：先用 EasyFrame，鉴权/额度/维护类失败再退到鼠鼠工具
-        videoProvider: 'auto'
+        # easyframe：只用 EasyFrame（保首尾帧/多参考）；mnmx：只用鼠鼠工具；
+        # auto：先用 EasyFrame，鉴权/额度/维护类失败再退到鼠鼠工具（但那条路会丢首尾帧与多参考）
+        videoProvider: 'easyframe'
         easyframeApiKey: ''
         easyframeBaseUrl: 'https://minimax.api.easyframe.cn'
         mnmxBaseUrl: 'https://www.runlive.top/mnmx'

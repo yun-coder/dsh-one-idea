@@ -273,10 +273,65 @@ if (reviewVideos[0].props.ref.current.currentTime !== 10
 }
 console.log('✓ 审片台通过：抽帧标记跳到成片，两个版本使用同一分段时间');
 
+// 长报错只占一行，全文收进「展开」：面板不该被一堵红字铺满。
+const longError = `拉片失败：${'上游日志 '.repeat(300)}`;
+queue.length = 0;
+queue.push(config, projects, 'production', selectedId, pageData, false, longError, '', false);
+const errorTree = registration({ t: (key) => key, host: 'main' });
+const errorLine = findAll(errorTree, (node) => node.props?.title === longError.trim())[0];
+if (!errorLine) throw new Error('长报错没有渲染出来');
+if (String(errorLine.children?.[0] ?? '').length > 241) throw new Error('报错没有被压成一行');
+if (!findAll(errorTree, (node) => node.type === 'summary').length) throw new Error('长报错缺少「展开全文」');
+console.log('✓ 长报错压成一行，全文收在可展开区里');
+
 // 空状态：没有项目时必须落到新建表单。
 queue.length = 0;
 queue.push({ projectDir: '', reviewThreshold: 80, stages: [], dimensions: [], voices: [], aspects: ['9:16'] }, [], 'production', '', null, false, '', '', false);
 const empty = registration({ t: (key) => key, host: 'main' });
 if (!empty || typeof empty !== 'object') throw new Error('空状态没有返回元素树');
 console.log('✓ 空状态（无项目 → 拉片台 + 新建表单）渲染通过');
+
+// 导演确认卡：想法/剧本进来后，先把带默认值的问题摆出来，答完才有「开始生产」。
+const intakePage = {
+  ...pageData,
+  project: {
+    ...pageData.project,
+    source: { kind: 'script', text: '第一场 夜 面馆\n老周：还是不要葱？' },
+    intake: {
+      status: 'ready',
+      summary: '要拍凌晨十二点的清汤面',
+      answers: [],
+      questions: [
+        {
+          id: 'q1', field: 'targetSeconds', question: '这条想做多长？', why: '决定分几段',
+          options: [{ label: '15 秒 · 一个钩子', value: '15' }, { label: '45 秒 · 完整故事', value: '45' }],
+          default: '45', kind: 'choice',
+        },
+        { id: 'q2', field: 'platform', question: '发哪个平台？', why: '', options: [], default: 'douyin', kind: 'text' },
+      ],
+    },
+  },
+};
+queue.length = 0;
+queue.push(config, projects, 'production', selectedId, intakePage, false, '', '', false);
+queue.push({}); // DirectorCard 的输入框状态
+const intakeTree = registration({ t: (key) => key, host: 'main' });
+if (!findAll(intakeTree, (node) => node.children?.includes?.('directorTitle')).length) throw new Error('导演确认卡没有渲染');
+if (!findAll(intakeTree, (node) => node.children?.includes?.('这条想做多长？')).length) throw new Error('导演问题没有渲染');
+if (!findAll(intakeTree, (node) => String(node.children?.[0] ?? '').includes('45 秒 · 完整故事')).length) throw new Error('问题选项没有渲染');
+if (findAll(intakeTree, (node) => node.children?.includes?.('startProduction')).length) throw new Error('还没确认完就出现「开始生产」');
+console.log('✓ 导演确认卡：问题 + 推荐选项都在，未确认完不出现「开始生产」');
+
+const confirmedPage = {
+  ...intakePage,
+  // 新项目还没有故事产物：确认完那张卡会留着，直到点了「开始生产」跑出剧情。
+  artifacts: {},
+  project: { ...intakePage.project, intake: { ...intakePage.project.intake, status: 'done', questions: [] } },
+};
+queue.length = 0;
+queue.push(config, projects, 'production', selectedId, confirmedPage, false, '', '', false);
+queue.push({});
+const confirmedTree = registration({ t: (key) => key, host: 'main' });
+if (!findAll(confirmedTree, (node) => node.children?.includes?.('startProduction')).length) throw new Error('确认完没有出现「开始生产」');
+console.log('✓ 导演确认完：出现「开始生产」，剧本模式标记可见');
 console.log('\n全部通过：面板在真实数据与空状态下都能完整渲染，没有运行期异常。');

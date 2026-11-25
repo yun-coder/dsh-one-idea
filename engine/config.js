@@ -16,6 +16,8 @@ export const DEFAULTS = {
   reviewThreshold: 80,
   /** strict：审核必须说 pass 且到阈值；balanced：门禁过、无 blocker、分数 ≥ 阈值-12 就带建议收下。 */
   reviewPolicy: 'balanced',
+  /** 创意 idea 过门后先停下来让人选方向，再往下跑剧情。 */
+  reviewIdea: true,
   maxRework: 2,
   aspectRatio: '9:16',
   resolution: '720p',
@@ -65,6 +67,12 @@ export const DEFAULTS = {
   cookiesFile: '',
   /** 可选：rea-video 可执行文件（逐镜判定 实拍/AI/代码 + 复刻路线）。留空就不跑。 */
   reaVideoCmd: '',
+  /**
+   * 拉片只拆一段：长视频先把高光段截出来再拆，避免整片解码跑到超时。
+   * referenceMaxSeconds 默认 120 秒（0 = 不截，整片拆）；referenceStartSeconds 默认从 0 开始。
+   */
+  referenceMaxSeconds: 120,
+  referenceStartSeconds: 0,
   reaVision: true,
   reaVisionShots: 12,
   reaVisionBy: 'dsh',
@@ -137,6 +145,19 @@ export function resolveConfig(config = {}, machine = loadMachineOverrides()) {
   fill('reaVideoCmd');
   fill('openfilmCmd', ['OPENFILM_BIN']);
   fill('promptsDir', ['CREATIVE_STUDIO_PROMPTS']);
+
+  // 布尔型：machine.json / 插件 config 显式写 false 才关。
+  if (config?.reviewIdea === false || machine?.reviewIdea === false) options.reviewIdea = false;
+
+  // 数字型配置：插件 config 优先，其次 machine.json，最后默认值（0 = 关闭截取）。
+  for (const key of ['referenceMaxSeconds', 'referenceStartSeconds']) {
+    const fromConfig = Number(config?.[key]);
+    const fromFile = Number(machine?.[key]);
+    const value = Number.isFinite(fromConfig) && fromConfig >= 0 ? fromConfig
+      : Number.isFinite(fromFile) && fromFile >= 0 ? fromFile
+        : options[key];
+    options[key] = Math.max(0, Math.round(Number(value) || 0));
+  }
 
   const dataRoot = options.dataDir || join(homedir(), '.dsh', 'creative-studio');
   // 技能目录留空就用 ~/.dsh/skills 下的标准位置，换机器不用改配置。

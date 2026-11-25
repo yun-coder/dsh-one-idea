@@ -2,7 +2,7 @@
  * 自检：装完之后跑一遍，知道缺什么、怎么补。
  * 同一份逻辑给 CLI（test/doctor.mjs）和面板（doctor 接口）用。
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +66,20 @@ export async function runDoctor({ options, dataRoot, projectRoot, promptsDir, pr
   } else {
     items.push(failItem('ffmpeg 不可用', `试过：${ffmpeg}`,
       '装 FFmpeg 6.1+，把 ffmpegPath 指到 ffmpeg.exe，或把 ffmpeg 加进 PATH'));
+  }
+
+  // 4.5 BGM：没有曲子时剪辑只有对白，切点会显得很硬。
+  if (options.bgmDir) {
+    if (!existsSync(options.bgmDir)) {
+      items.push(warnItem('BGM 目录不存在', options.bgmDir,
+        '把 machine.json 的 bgmDir 指到一个放了 mp3/wav/m4a 的目录；没有 BGM，成片只有对白，剪辑会显硬'));
+    } else {
+      const tracks = readdirSync(options.bgmDir).filter((name) => /\.(mp3|m4a|wav|aac|flac)$/i.test(name));
+      items.push(tracks.length > 0
+        ? okItem('BGM 目录', `${options.bgmDir}（${tracks.length} 首）`)
+        : warnItem('BGM 目录是空的', options.bgmDir,
+          '放几首情绪对得上的曲子，文件名带上情绪词（如「低音弦乐_对峙.mp3」「锣_收尾.mp3」），剪辑阶段会按 EDL 的 BGM 描述匹配'));
+    }
   }
 
   // 5. shot-contract（分镜硬依赖）

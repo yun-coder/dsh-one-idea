@@ -67,6 +67,9 @@ check('12 个音色 id 全部有真音色', VOICE_CATALOG.every((voice) => VOICE
 check('温软女声 ×1.0 = -2%', ttsRatePercent('v_f_warm', 1) === -2, String(ttsRatePercent('v_f_warm', 1)));
 check('播音男声 ×1.1 = +10%', ttsRatePercent('v_m_anchor', 1.1) === 10, String(ttsRatePercent('v_m_anchor', 1.1)));
 check('12 个音色都有云知声音色', VOICE_CATALOG.every((voice) => UNISOUND_VOICES[voice.id]));
+check('温厚女声是给长辈的（35–50）', /35-50/.test(String(VOICE_CATALOG.find((voice) => voice.id === 'v_f_salt')?.age)), VOICE_CATALOG.find((voice) => voice.id === 'v_f_salt')?.age);
+check('夫人不和二娘撞同一个后端音色', UNISOUND_VOICES.v_f_salt !== UNISOUND_VOICES.v_f_bright, `${UNISOUND_VOICES.v_f_salt} / ${UNISOUND_VOICES.v_f_bright}`);
+check('四个常用女声后端互不撞', new Set([UNISOUND_VOICES.v_f_calm, UNISOUND_VOICES.v_f_bright, UNISOUND_VOICES.v_f_salt, UNISOUND_VOICES.v_f_playful]).size === 4, [UNISOUND_VOICES.v_f_calm, UNISOUND_VOICES.v_f_bright, UNISOUND_VOICES.v_f_salt, UNISOUND_VOICES.v_f_playful].join(','));
 check('原速 = 50', unisoundSpeed(1) === 50, String(unisoundSpeed(1)));
 check('×1.3 = 65', unisoundSpeed(1.3) === 65, String(unisoundSpeed(1.3)));
 check('情绪词能落到枚举', emotionEnum('心疼但压着') === 'depressed' && emotionEnum('轻快地' ) === 'happy' && emotionEnum('平静交代') === null);

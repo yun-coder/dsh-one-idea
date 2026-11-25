@@ -72,12 +72,12 @@ def api_error(data: dict) -> str | None:
     return f"status_code={code}：{base.get('status_msg') or '未知错误'}"
 
 
-def create_task(base: str, key: str, *, text: str, voice_id: str, speed: int, emotion: str | None) -> str:
+def create_task(base: str, key: str, *, text: str, voice_id: str, speed: int, pitch: int, emotion: str | None) -> str:
     voice_setting = {
         "voice_id": voice_id,
         "speed": speed,
         "volume": 50,
-        "pitch": 50,
+        "pitch": max(0, min(100, int(pitch))),
         "bright": 50,
         "language": "zh",
     }
@@ -138,11 +138,11 @@ def synthesize(args) -> int:
         emotion = None
 
     try:
-        task_id = create_task(base, key, text=text, voice_id=args.voice_id, speed=args.speed, emotion=emotion)
+        task_id = create_task(base, key, text=text, voice_id=args.voice_id, speed=args.speed, pitch=args.pitch, emotion=emotion)
     except TTSError as error:
         # 情绪不是每个音色都支持：去掉 emotion 再来一次，别因为一个 emotion 字段丢整句。
         if emotion and "emotion" in str(error):
-            task_id = create_task(base, key, text=text, voice_id=args.voice_id, speed=args.speed, emotion=None)
+            task_id = create_task(base, key, text=text, voice_id=args.voice_id, speed=args.speed, pitch=args.pitch, emotion=None)
         else:
             raise
     final = wait_task(base, key, task_id, timeout=args.timeout, poll=args.poll)
@@ -160,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--voice-id", default="cn_male_chenyu")
     parser.add_argument("--speed", type=int, default=50, help="0–100，50 是原速")
+    parser.add_argument("--pitch", type=int, default=50, help="0–100，50 是原调；长辈压低、少女抬高")
     parser.add_argument("--emotion", default=None, help="happy/angry/depressed/whisper/loudly/neutral")
     parser.add_argument("--key", default="", help="API key；留空读环境变量 UNISOUND_API_KEY")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)

@@ -209,7 +209,9 @@ export function createMedia({ ffmpegPath = 'ffmpeg', log = () => {} }) {
     const bgmIndex = talks.length + 1;
     if (hasBgm) args.push('-stream_loop', '-1', '-i', bgm);
 
-    const filters = ['[0:a]aresample=48000,aformat=channel_layouts=stereo[orig]'];
+    // 片段是 H3 生成的，自带它念的台词；有 TTS 轨时把原声静音，否则同一句会有两个人同时念。
+    // 保留一条静音轨只是为了用它的长度定成片时长（amix 的 duration=first）。
+    const filters = [`[0:a]aresample=48000,aformat=channel_layouts=stereo${talks.length > 0 ? ',volume=0' : ''}[orig]`];
     talks.forEach((line, index) => {
       const delay = Math.max(0, Math.round((Number(line.at) || 0) * 1000));
       const volume = Number.isFinite(Number(line.volume)) ? Number(line.volume) : 1;
